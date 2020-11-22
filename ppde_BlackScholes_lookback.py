@@ -88,7 +88,7 @@ if __name__ == "__main__":
     parser.add_argument('--ffn_hidden', default=[20,20], nargs="+", type=int)
     parser.add_argument('--rnn_hidden', default=20, type=int)
     parser.add_argument('--depth', default=3, type=int)
-    parser.add_argument('--T', default=1., type=float)
+    parser.add_argument('--T', default=0.5, type=float)
     parser.add_argument('--n_steps', default=100, type=int, help="number of steps in time discrretisation")
     parser.add_argument('--lag', default=10, type=int, help="lag in fine time discretisation to create coarse time discretisation")
     parser.add_argument('--mu', default=0.05, type=float, help="risk free rate")
