@@ -38,7 +38,8 @@ def train(T,
         batch_size, 
         lag,
         base_dir,
-        device
+        device,
+        method
         ):
     
     logfile = os.path.join(base_dir, "log.txt")
@@ -53,7 +54,10 @@ def train(T,
     for idx in range(max_updates):
         optimizer.zero_grad()
         x0 = sample_x0(batch_size, d, device)
-        loss, _, _ = fbsde.bsdeint(ts=ts, x0=x0, option=lookback, lag=lag)
+        if method=="bsde":
+            loss, _, _ = fbsde.bsdeint(ts=ts, x0=x0, option=lookback, lag=lag)
+        else:
+            loss, _, _ = fbsde.conditional_expectation(ts=ts, x0=x0, option=lookback, lag=lag)
         loss.backward()
         optimizer.step()
         losses.append(loss.cpu().item())
@@ -93,6 +97,7 @@ if __name__ == "__main__":
     parser.add_argument('--lag', default=10, type=int, help="lag in fine time discretisation to create coarse time discretisation")
     parser.add_argument('--mu', default=0.05, type=float, help="risk free rate")
     parser.add_argument('--sigma', default=0.3, type=float, help="risk free rate")
+    parser.add_argument('--method', default="bsde", type=string, help="learning method", choices=["bsde","orthogonal"])
     
 
     args = parser.parse_args()
@@ -102,8 +107,8 @@ if __name__ == "__main__":
     else:
         device="cpu"
 
-    if not os.path.exists(args.base_dir):
-        os.makedirs(args.base_dir)
+    if not os.path.exists(os.path.join(args.base_dir, "BS", "args.method")):
+        os.makedirs(os.path.join(args.base_dir, "BS", "args.method"))
 
     train(T=args.T,
         n_steps=args.n_steps,
@@ -117,5 +122,6 @@ if __name__ == "__main__":
         batch_size=args.batch_size,
         lag=args.lag,
         base_dir=args.base_dir,
-        device=device
+        device=device,
+        method=args.method
         )

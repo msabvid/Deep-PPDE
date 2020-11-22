@@ -106,6 +106,37 @@ class FBSDE(nn.Module):
         return loss, Y, payoff
             
             
+    def conditional_expectation(self, ts: torch.Tensor, x0: torch.Tensor, option: Lookback, lag: int): 
+        """
+        Parameters
+        ----------
+        ts: troch.Tensor
+            timegrid. Vector of length N
+        x0: torch.Tensor
+            initial value of SDE. Tensor of shape (batch_size, d)
+        option: object of class option to calculate payoff
+        lag: int
+            lag in fine time discretisation
+        
+        """
+
+        x, path_signature, brownian_increments = self.prepare_data(ts,x0,lag)
+        payoff = option.payoff(x) # (batch_size, 1)
+        device = x.device
+        batch_size = x.shape[0]
+        t = ts[::lag].reshape(1,-1,1).repeat(batch_size,1,1)
+        tx = torch.cat([t,path_signature],2)
+        
+        Y = self.f(tx) # (batch_size, L, 1)
+
+        loss_fn = nn.MSELoss()
+        loss = 0
+        for idx,t in enumerate(ts[::lag]):
+            discount_factor = torch.exp(-self.mu*(ts[-1]-t))
+            target = discount_factor*payoff 
+            pred = Y[:,idx,:] 
+            loss += loss_fn(pred, target)
+        return loss, Y, payoff
 
 
             
