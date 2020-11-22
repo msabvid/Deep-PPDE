@@ -97,7 +97,7 @@ if __name__ == "__main__":
     parser.add_argument('--lag', default=10, type=int, help="lag in fine time discretisation to create coarse time discretisation")
     parser.add_argument('--mu', default=0.05, type=float, help="risk free rate")
     parser.add_argument('--sigma', default=0.3, type=float, help="risk free rate")
-    parser.add_argument('--method', default="bsde", type=string, help="learning method", choices=["bsde","orthogonal"])
+    parser.add_argument('--method', default="bsde", type=str, help="learning method", choices=["bsde","orthogonal"])
     
 
     args = parser.parse_args()
