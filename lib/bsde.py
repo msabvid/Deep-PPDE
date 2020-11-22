@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import signatory
-from typing import Tuple, Optional
+from typing import Tuple, Optional, List
 
 from lib.networks import RNN
 from lib.options import Lookback
@@ -12,7 +12,7 @@ from lib.augmentations import apply_augmentations
 
 class FBSDE(nn.Module):
 
-    def __init__(self, ts: torch.Tensor, d: int, mu: int, sigma: int, depth: int, **kwargs):
+    def __init__(self, ts: torch.Tensor, d: int, mu: int, sigma: int, depth: int, rnn_hidden: int, ffn_hidden: List[int]):
         super().__init__()
         self.d = d
         self.mu = mu
@@ -20,11 +20,10 @@ class FBSDE(nn.Module):
     
         # deep learning approximations of ppde solution and ppde gradient
         self.depth = depth
-        self.augmentations = (LeadLag(with_time=False))
+        self.augmentations = (LeadLag(with_time=False),)
         self.sig_channels = signatory.signature_channels(channels=2*d, depth=depth) # x2 because we do lead-lag
-        f = RNN(rnn_in=self.sig_channels+1, rnn_hidden=kwargs["rnn_hidden"], ffn_sizes=kwargs["ffn_sizes"]) # +1 is for time
-        kwargs["ffn_sizes"][-1] = d
-        dfdx = RNN(rnn_in=self.sig_channels+1, rnn_hidden=kwargs["rnn_hidden"], ffn_sizes=kwargs["ffn_sizes"]) # +1 is for time
+        self.f = RNN(rnn_in=self.sig_channels+1, rnn_hidden=rnn_hidden, ffn_sizes=ffn_hidden+[1]) # +1 is for time
+        self.dfdx = RNN(rnn_in=self.sig_channels+1, rnn_hidden=rnn_hidden, ffn_sizes=ffn_hidden+[d]) # +1 is for time
 
     def sdeint(self, ts, x0):
         """
@@ -42,8 +41,8 @@ class FBSDE(nn.Module):
         device = x.device
         brownian_increments = torch.zeros(batch_size, len(ts)-1, self.d)
         for idx, t in enumerate(ts[1:]):
-            h = ts[idx]-ts[idx-1]
-            brownian_increments[:,idx,:] = torch.randn(batch_size, d, device=device)*torch.sqrt(h)
+            h = ts[idx+1]-ts[idx]
+            brownian_increments[:,idx,:] = torch.randn(batch_size, self.d, device=device)*torch.sqrt(h)
             x_new = x[:,-1,:] + self.mu*x[:,-1,:]*h + self.sigma*x[:,-1,:]*brownian_increments[:,idx,:]
             x = torch.cat([x, x_new.unsqueeze(1)],1)
         return x, brownian_increments
@@ -91,7 +90,7 @@ class FBSDE(nn.Module):
         device = x.device
         batch_size = x.shape[0]
         t = ts[::lag].reshape(1,-1,1).repeat(batch_size,1,1)
-        tx = torch.cat([t,path_siganture],2)
+        tx = torch.cat([t,path_signature],2)
         
         Y = self.f(tx) # (batch_size, L, 1)
         Z = self.dfdx(tx) # (batch_size, L, dim)

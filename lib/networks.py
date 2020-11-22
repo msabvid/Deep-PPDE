@@ -48,7 +48,6 @@ class RNN(nn.Module):
 
     def __init__(self, rnn_in, rnn_hidden, ffn_sizes, activation=nn.ReLU, output_activation=nn.Identity):
         super().__init__()
-        assert rnn_sizes[1] == ffn_sizes[0]
         self.rnn = nn.LSTM(input_size=rnn_in, hidden_size=rnn_hidden,
                 num_layers=1,
                 batch_first=True)
