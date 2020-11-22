@@ -39,7 +39,7 @@ class FBSDE(nn.Module):
         x = x0.unsqueeze(1)
         batch_size = x.shape[0]
         device = x.device
-        brownian_increments = torch.zeros(batch_size, len(ts)-1, self.d)
+        brownian_increments = torch.zeros(batch_size, len(ts)-1, self.d, device=device)
         for idx, t in enumerate(ts[1:]):
             h = ts[idx+1]-ts[idx]
             brownian_increments[:,idx,:] = torch.randn(batch_size, self.d, device=device)*torch.sqrt(h)
@@ -60,14 +60,14 @@ class FBSDE(nn.Module):
             if idx == 0:
                 portion_path = torch.cat([basepoint, x[:,0,:].unsqueeze(1)],1)
             else:
-                portion_path = x[:,id_t-lag:id_t,:] 
+                portion_path = x[:,id_t-lag:id_t+1,:] 
                 
             augmented_path = apply_augmentations(portion_path, self.augmentations)
             path_signature[:,idx,:] = signatory.signature(augmented_path, self.depth)
             try:
                 sum_increments[:,idx,:] = torch.sum(brownian_increments[:,id_t:id_t+lag], 1)
             except:
-                pass # it is the last point and we don't have anymore increments, but that's okay
+                pass # it is the last point and we don't have anymore increments, but that's okay, because at the last step of the bsde, we compare thes olution of the bsde against the payoff of the option
         return x, path_signature, sum_increments 
 
     
@@ -103,7 +103,7 @@ class FBSDE(nn.Module):
             stoch_int = torch.sum(Z[:,idx,:]*brownian_increments[:,idx,:], 1, keepdim=True)
             pred = Y[:,idx,:] + stoch_int
             loss += loss_fn(pred, target)
-        return loss
+        return loss, Y, payoff
             
             
 

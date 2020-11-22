@@ -42,28 +42,34 @@ def train(T,
         ):
     
     logfile = os.path.join(base_dir, "log.txt")
-    ts = torch.linspace(0,T,n_steps+1)
+    ts = torch.linspace(0,T,n_steps+1, device=device)
     lookback = Lookback()
     fbsde = FBSDE(ts, d, mu, sigma, depth, rnn_hidden, ffn_hidden)
     fbsde.to(device)
-    optimizer = torch.optim.RMSprop(fbsde.parameters(), lr=0.001)
+    optimizer = torch.optim.RMSprop(fbsde.parameters(), lr=0.0005)
     
     pbar = tqdm.tqdm(total=max_updates)
     losses = []
     for idx in range(max_updates):
         optimizer.zero_grad()
         x0 = sample_x0(batch_size, d, device)
-        loss = fbsde.bsdeint(ts=ts, x0=x0, option=lookback, lag=lag)
+        loss, _, _ = fbsde.bsdeint(ts=ts, x0=x0, option=lookback, lag=lag)
         loss.backward()
         optimizer.step()
         losses.append(loss.cpu().item())
+        # testing
         if idx%10 == 0:
+            with torch.no_grad():
+                x0 = torch.ones(5000,d,device=device) # we do monte carlo
+                loss, Y, payoff = fbsde.bsdeint(ts=ts,x0=x0,option=lookback,lag=lag)
+                payoff = payoff.mean()
+            
             pbar.update(10)
-            write("loss={}".format(loss.item()),logfile,pbar)
+            write("loss={:.4f}, Monte Carlo price={:.4f}, predicted={:.4f}".format(loss.item(),payoff.item(), Y[0,0,0].item()),logfile,pbar)
     
     result = {"state":fbsde.state_dict(),
             "loss":losses}
-    torch.save(os.path.join(base_dir, "result.pth.tar"), result)
+    torch.save(result, os.path.join(base_dir, "result.pth.tar"))
 
 
 
