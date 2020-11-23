@@ -27,7 +27,8 @@ class Lookback(BaseOption):
         payoff: torch.Tensor
             lookback option payoff. Tensor of shape (batch_size,1)
         """
-        payoff = torch.max(x, 1)[0]-x[:,-1,:] # (batch_size, d)
-        return torch.sum(payoff, 1, keepdim=True) # (batch_size, 1)
+        basket = torch.sum(x,2) # (batch_size, N)
+        payoff = torch.max(basket, 1)[0]-basket[:,-1] # (batch_size)
+        return payoff.unsqueeze(1) # (batch_size, 1)
 
 
