@@ -27,6 +27,7 @@ class FBSDE(nn.Module):
 
     def sdeint(self, ts, x0):
         """
+        Euler scheme to solve the SDE.
         Parameters
         ----------
         ts: troch.Tensor
@@ -49,6 +50,29 @@ class FBSDE(nn.Module):
 
     
     def prepare_data(self, ts: torch.Tensor, x0: torch.Tensor, lag: int):
+        """
+        Prepare the data:
+            1. Solve the sde using some sde solver on a fine time discretisation
+            2. calculate path signature between consecutive timesteps of a coarser time discretisation
+            3. Calculate increments of brownian motion on the coarser time discretisation
+        Parameters
+        ----------
+        ts: torch.Tensor
+            Time discrstisation. Tensor of size (n_steps + 1)
+        x0: torch.Tensor
+            initial value of paths. Tensor of size (batch_size, d)
+        lag: int
+            lag used to create the coarse time discretisation in terms of the fine time discretisation.
+        
+        Returns
+        -------
+        x: torch.Tensor
+            Solution of the SDE on the fine time discretisation. Tensor of shape (batch_size, n_steps+1, d)
+        path_signature: torch.Tensor
+            Stream of signatures. Tensor of shape (batch_size, n_steps/lag + 1, sig_channels)
+        sum_increments: torch.Tensor
+            Increments of the Brownian motion on the coarse time discretisation. Tensor of shape (batch_size, n_steps/lag+1, d)
+        """
         x, brownian_increments = self.sdeint(ts, x0)
         device = x.device
         batch_size = x.shape[0]
@@ -101,7 +125,7 @@ class FBSDE(nn.Module):
             discount_factor = torch.exp(-self.mu*(ts[idx+lag]-t))
             target = payoff if t==ts[-1] else discount_factor*Y[:,idx+1,:].detach()
             stoch_int = torch.sum(Z[:,idx,:]*brownian_increments[:,idx,:], 1, keepdim=True)
-            pred = Y[:,idx,:] + stoch_int
+            pred = Y[:,idx,:] + stoch_int # if t==ts[-1], then it is already taken into account that stoch_int=0, because the increment of Brownian motion is 0, therefore we are indeed comparing against the payoff
             loss += loss_fn(pred, target)
         return loss, Y, payoff
             
