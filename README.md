@@ -28,7 +28,7 @@ optional arguments:
   --n_steps N_STEPS     number of steps in time discrretisation
   --lag LAG             lag in fine time discretisation to create coarse time discretisation
   --mu MU               risk free rate
-  --sigma SIGMA         risk free rate
+  --sigma SIGMA         volatility
   --method {bsde,orthogonal}
                         learning method
 ```
