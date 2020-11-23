@@ -173,7 +173,7 @@ class FBSDE(nn.Module):
             Z = self.dfdx(tx) # (batch_size, L, dim)
         stoch_int = 0
         for idx,t in enumerate(ts[::lag]):
-            discount_factor = torch.exp(-t))
+            discount_factor = torch.exp(-self.mu *t)
             stoch_int += discount_factor * torch.sum(Z[:,idx,:]*brownian_increments[:,idx,:], 1, keepdim=True)
         
         return payoff, payoff-stoch_int # stoch_int has expected value 0, thus it doesn't add any bias to the MC estimator, and it is correlated with payoff
