@@ -213,7 +213,7 @@ class FBSDE_Heston(FBSDE):
         for idx, t in enumerate(ts[1:]):
             h = ts[idx+1]-ts[idx]
             brownian_increments[:,idx,:] = torch.randn(batch_size, self.d, device=device)*torch.sqrt(h)
-            s_new = x[:,-1,0] + self.mu*x[:,-1,0]*h + self.sigma*x[:,-1,0]*torch.sqrt(x[:,-1,1])*brownian_increments[:,idx,0]
+            s_new = x[:,-1,0] + self.mu*x[:,-1,0]*h + x[:,-1,0]*torch.sqrt(x[:,-1,1])*brownian_increments[:,idx,0]
             v_new = x[:,-1,1] + self.kappa*(self.theta-x[:,-1,1])*h + self.vol_of_vol*torch.sqrt(x[:,-1,1])*brownian_increments[:,idx,1]
             x_new = torch.stack([s_new, v_new], 1) # (batch_size, 2)
             x = torch.cat([x, x_new.unsqueeze(1)],1)
