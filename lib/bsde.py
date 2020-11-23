@@ -105,8 +105,11 @@ class FBSDE(nn.Module):
         loss_fn = nn.MSELoss()
         loss = 0
         for idx,t in enumerate(ts[::lag]):
-            discount_factor = torch.exp(-self.mu*(ts[idx+lag]-t))
-            target = payoff if t==ts[-1] else discount_factor*Y[:,idx+1,:].detach()
+            if t==ts[-1]:
+                target = payoff
+            else:
+                discount_factor = torch.exp(-self.mu*(ts[idx*lag+lag]-t))
+                target = discount_factor*Y[:,idx+1,:].detach()
             stoch_int = torch.sum(Z[:,idx,:]*brownian_increments[:,idx,:], 1, keepdim=True)
             pred = Y[:,idx,:] + stoch_int # if t==ts[-1], then it is already taken into account that stoch_int=0, because the increment of Brownian motion is 0, therefore we are indeed comparing against the payoff
             loss += loss_fn(pred, target)
