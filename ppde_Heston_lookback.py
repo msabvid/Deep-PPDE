@@ -114,9 +114,10 @@ if __name__ == "__main__":
         device = "cuda:{}".format(args.device)
     else:
         device="cpu"
-
-    if not os.path.exists(os.path.join(args.base_dir, "Heston", "args.method")):
-        os.makedirs(os.path.join(args.base_dir, "Heston", "args.method"))
+    
+    results_path = os.path.exists(os.path.join(args.base_dir, "Heston", args.method)
+    if not os.path.exists(results_path):
+        os.makedirs(results_path)
 
     train(T=args.T,
         n_steps=args.n_steps,
@@ -131,7 +132,7 @@ if __name__ == "__main__":
         max_updates=args.max_updates,
         batch_size=args.batch_size,
         lag=args.lag,
-        base_dir=args.base_dir,
+        base_dir=results_path,
         device=device,
         method=args.method
         )
