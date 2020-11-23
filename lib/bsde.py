@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import signatory
 from typing import Tuple, Optional, List
+from abc import abstractmethod
 
 from lib.networks import RNN
 from lib.options import Lookback
@@ -12,41 +13,23 @@ from lib.augmentations import apply_augmentations
 
 class FBSDE(nn.Module):
 
-    def __init__(self, ts: torch.Tensor, d: int, mu: int, sigma: int, depth: int, rnn_hidden: int, ffn_hidden: List[int]):
+    def __init__(self, d: int, mu: float, depth: int, rnn_hidden: int, ffn_hidden: List[int]):
         super().__init__()
         self.d = d
-        self.mu = mu
-        self.sigma = sigma # change it to a parameter to solve a parametric family of PPDEs
-    
-        # deep learning approximations of ppde solution and ppde gradient
+        self.mu = mu # risk free rate
+
         self.depth = depth
         self.augmentations = (LeadLag(with_time=False),)
         self.sig_channels = signatory.signature_channels(channels=2*d, depth=depth) # x2 because we do lead-lag
         self.f = RNN(rnn_in=self.sig_channels+1, rnn_hidden=rnn_hidden, ffn_sizes=ffn_hidden+[1]) # +1 is for time
         self.dfdx = RNN(rnn_in=self.sig_channels+1, rnn_hidden=rnn_hidden, ffn_sizes=ffn_hidden+[d]) # +1 is for time
 
+    @abstractmethod
     def sdeint(self, ts, x0):
         """
-        Euler scheme to solve the SDE.
-        Parameters
-        ----------
-        ts: troch.Tensor
-            timegrid. Vector of length N
-        x0: torch.Tensor
-            initial value of SDE. Tensor of shape (batch_size, d)
-        brownian: Optional. 
-            torch.tensor of shape (batch_size, N, d)
+        Code here the SDE that the underlying assets follow
         """
-        x = x0.unsqueeze(1)
-        batch_size = x.shape[0]
-        device = x.device
-        brownian_increments = torch.zeros(batch_size, len(ts)-1, self.d, device=device)
-        for idx, t in enumerate(ts[1:]):
-            h = ts[idx+1]-ts[idx]
-            brownian_increments[:,idx,:] = torch.randn(batch_size, self.d, device=device)*torch.sqrt(h)
-            x_new = x[:,-1,:] + self.mu*x[:,-1,:]*h + self.sigma*x[:,-1,:]*brownian_increments[:,idx,:]
-            x = torch.cat([x, x_new.unsqueeze(1)],1)
-        return x, brownian_increments
+        ...
 
     
     def prepare_data(self, ts: torch.Tensor, x0: torch.Tensor, lag: int):
@@ -163,14 +146,75 @@ class FBSDE(nn.Module):
         return loss, Y, payoff
 
 
-            
 
 
+class FBSDE_BlackScholes(FBSDE):
 
+    def __init__(self, d: int, mu: float, sigma: float, depth: int, rnn_hidden: int, ffn_hidden: List[int]):
+        super(FBSDE_BlackScholes, self).__init__(d=d, mu=mu, depth=depth, rnn_hidden=rnn_hidden, ffn_hidden=ffn_hidden)
+        self.sigma = sigma # change it to a parameter to solve a parametric family of PPDEs
+    
+    
+    def sdeint(self, ts, x0):
+        """
+        Euler scheme to solve the SDE.
+        Parameters
+        ----------
+        ts: troch.Tensor
+            timegrid. Vector of length N
+        x0: torch.Tensor
+            initial value of SDE. Tensor of shape (batch_size, d)
+        brownian: Optional. 
+            torch.tensor of shape (batch_size, N, d)
+        Note
+        ----
+        I am assuming uncorrelated Brownian motion
+        """
+        x = x0.unsqueeze(1)
+        batch_size = x.shape[0]
+        device = x.device
+        brownian_increments = torch.zeros(batch_size, len(ts)-1, self.d, device=device)
+        for idx, t in enumerate(ts[1:]):
+            h = ts[idx+1]-ts[idx]
+            brownian_increments[:,idx,:] = torch.randn(batch_size, self.d, device=device)*torch.sqrt(h)
+            x_new = x[:,-1,:] + self.mu*x[:,-1,:]*h + self.sigma*x[:,-1,:]*brownian_increments[:,idx,:]
+            x = torch.cat([x, x_new.unsqueeze(1)],1)
+        return x, brownian_increments
 
+    
 
+class FBSDE_Heston(FBSDE):
 
-
-
-
-        
+    def __init__(self, d: int, mu: float, vol_of_vol: float, kappa: float, theta: float,  depth: int, rnn_hidden: int, ffn_hidden: List[int]):
+        assert d==2, "we need d=2"
+        assert 2*kappa*theta > vol_of_vol , "Feller condition is not satisfied"
+        super(FBSDE_Heston, self).__init__(d=d, mu=mu, depth=depth, rnn_hidden=rnn_hidden, ffn_hidden=ffn_hidden)
+        self.vol_of_vol = vol_of_vol
+        self.kappa = kappa
+        self.theta = theta
+    
+    
+    def sdeint(self, ts, x0):
+        """
+        Euler scheme to solve the SDE.
+        Parameters
+        ----------
+        ts: troch.Tensor
+            timegrid. Vector of length N
+        x0: torch.Tensor
+            initial value of SDE. Tensor of shape (batch_size, d)
+        brownian: Optional. 
+            torch.tensor of shape (batch_size, N, d)
+        """
+        x = x0.unsqueeze(1)
+        batch_size = x.shape[0]
+        device = x.device
+        brownian_increments = torch.zeros(batch_size, len(ts)-1, self.d, device=device)
+        for idx, t in enumerate(ts[1:]):
+            h = ts[idx+1]-ts[idx]
+            brownian_increments[:,idx,:] = torch.randn(batch_size, self.d, device=device)*torch.sqrt(h)
+            s_new = x[:,-1,0] + self.mu*x[:,-1,0]*h + self.sigma*x[:,-1,0]*torch.sqrt(x[:,-1,1])*brownian_increments[:,idx,0]
+            v_new = x[:,-1,1] + self.kappa*(self.theta-x[:,-1,1])*h + self.vol_of_vol*torch.sqrt(x[:,-1,1])*brownian_increments[:,idx,1]
+            x_new = torch.stack([s_new, v_new], 1) # (batch_size, 2)
+            x = torch.cat([x, x_new.unsqueeze(1)],1)
+        return x, brownian_increments

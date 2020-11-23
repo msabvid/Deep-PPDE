@@ -6,7 +6,7 @@ import tqdm
 import os
 import math
 
-from lib.bsde import FBSDE
+from lib.bsde import FBSDE_BlackScholes as FBSDE
 from lib.options import Lookback
 
 
@@ -45,7 +45,7 @@ def train(T,
     logfile = os.path.join(base_dir, "log.txt")
     ts = torch.linspace(0,T,n_steps+1, device=device)
     lookback = Lookback()
-    fbsde = FBSDE(ts, d, mu, sigma, depth, rnn_hidden, ffn_hidden)
+    fbsde = FBSDE(d, mu, sigma, depth, rnn_hidden, ffn_hidden)
     fbsde.to(device)
     optimizer = torch.optim.RMSprop(fbsde.parameters(), lr=0.0005)
     
