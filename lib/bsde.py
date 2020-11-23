@@ -145,6 +145,39 @@ class FBSDE(nn.Module):
             loss += loss_fn(pred, target)
         return loss, Y, payoff
 
+    def unbiased_price(self, ts: torch.Tensor, x0:torch.Tensor, option: Lookback, lag: int, MC_samples: int):
+        """
+        We calculate an unbiased estimator of the price at time t=0 (for now) using Monte Carlo, and the stochastic integral as a control variate
+        Parameters
+        ----------
+        ts: troch.Tensor
+            timegrid. Vector of length N
+        x0: torch.Tensor
+            initial value of SDE. Tensor of shape (1, d)
+        option: object of class option to calculate payoff
+        lag: int
+            lag in fine time discretisation
+        MC_samples: int
+            Monte Carlo samples
+        """
+        assert x0.shape[0] == 1, "we need just 1 sample"
+        x0 = x0.repeat(MC_samples, 1)
+        x, path_signature, brownian_increments = self.prepare_data(ts,x0,lag)
+        payoff = option.payoff(x) # (batch_size, 1)
+        device = x.device
+        batch_size = x.shape[0]
+        t = ts[::lag].reshape(1,-1,1).repeat(batch_size,1,1)
+        tx = torch.cat([t,path_signature],2)
+        
+        with torch.no_grad():
+            Z = self.dfdx(tx) # (batch_size, L, dim)
+        stoch_int = 0
+        for idx,t in enumerate(ts[::lag]):
+            discount_factor = torch.exp(-t))
+            stoch_int += discount_factor * torch.sum(Z[:,idx,:]*brownian_increments[:,idx,:], 1, keepdim=True)
+        
+        return payoff, payoff-stoch_int # stoch_int has expected value 0, thus it doesn't add any bias to the MC estimator, and it is correlated with payoff
+
 
 
 
@@ -152,7 +185,7 @@ class FBSDE_BlackScholes(FBSDE):
 
     def __init__(self, d: int, mu: float, sigma: float, depth: int, rnn_hidden: int, ffn_hidden: List[int]):
         super(FBSDE_BlackScholes, self).__init__(d=d, mu=mu, depth=depth, rnn_hidden=rnn_hidden, ffn_hidden=ffn_hidden)
-        self.sigma = sigma # change it to a parameter to solve a parametric family of PPDEs
+        self.sigma = sigma # change it to a torch.parameter to solve a parametric family of PPDEs
     
     
     def sdeint(self, ts, x0):
