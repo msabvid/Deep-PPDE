@@ -179,7 +179,7 @@ class FBSDE(nn.Module):
             discount_factor = torch.exp(-self.mu *t)
             stoch_int += discount_factor * torch.sum(Z[:,idx,:]*brownian_increments[:,idx,:], 1, keepdim=True)
         
-        return payoff, torch.exp(-self.mu*t)*payoff-stoch_int # stoch_int has expected value 0, thus it doesn't add any bias to the MC estimator, and it is correlated with payoff
+        return payoff, torch.exp(-self.mu*ts[-1])*payoff-stoch_int # stoch_int has expected value 0, thus it doesn't add any bias to the MC estimator, and it is correlated with payoff
 
 
 
