@@ -37,3 +37,44 @@ class Lookback(BaseOption):
         return payoff.unsqueeze(1) # (batch_size, 1)
 
 
+class Autocallable(BaseOption):
+    
+    def __init__(self, idx_traded: int, B: int, Q1: float, Q2: float, q: float, r: float, ts: torch.Tensor):
+        """
+        Autocallable option with 
+        - two observation dates (T/3, 2T/3), 
+        - premature payoffs Q1 and Q2
+        - redemption payoff q*s
+        """
+        
+        self.idx_traded = idx_traded # index of traded asset
+        self.B = B # barrier
+        self.Q1 = Q1
+        self.Q2 = Q2
+        self.q = q # redemption payoff
+        self.r = r # risk-free rate
+        self.ts = ts # timegrid
+    
+    def payoff(self, x):
+        """
+        Parameters
+        ----------
+        x: torch.Tensor
+            Path history. Tensor of shape (batch_size, N, d) where N is path length
+        Returns
+        -------
+        payoff: torch.Tensor
+            autocallable option payoff. Tensor of shape (batch_size,1)
+        """
+        id_t1 = len(self.ts)//3
+        mask1 = x[:, id_t1, self.idx_traded]>=self.B
+        id_t2 = 2*len(self.ts)//3
+        mask2 = x[:, id_t2, self.idx_traded]>=self.B
+
+        payoff = mask1 * torch.exp(self.r*(self.ts[-1]-self.ts[id_t1]))
+        payoff += ~mask1 * mask2 * torch.exp(self.r*(self.ts[-1]-self.ts[id_t2]))
+        payoff += ~mask1 * (~mask2) * self.q*x[:,-1,self.idx_traded]
+
+        return payoff.unsqueeze(1) # (batch_size, 1)
+
+
