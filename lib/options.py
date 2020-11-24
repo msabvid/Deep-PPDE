@@ -71,8 +71,8 @@ class Autocallable(BaseOption):
         id_t2 = 2*len(self.ts)//3
         mask2 = x[:, id_t2, self.idx_traded]>=self.B
 
-        payoff = mask1 * torch.exp(self.r*(self.ts[-1]-self.ts[id_t1]))
-        payoff += ~mask1 * mask2 * torch.exp(self.r*(self.ts[-1]-self.ts[id_t2]))
+        payoff = mask1 * self.Q1 * torch.exp(self.r*(self.ts[-1]-self.ts[id_t1])) # we get the payoff Q1, and we put in a risk-less acount for the remaining time
+        payoff += ~mask1 * mask2 * self.Q2 * torch.exp(self.r*(self.ts[-1]-self.ts[id_t2]))
         payoff += ~mask1 * (~mask2) * self.q*x[:,-1,self.idx_traded]
 
         return payoff.unsqueeze(1) # (batch_size, 1)
