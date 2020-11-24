@@ -72,7 +72,7 @@ def train(T,
                 x0 = torch.ones(5000,d,device=device) # we do monte carlo
                 x0[:,1] = x0[:,1]*0.04
                 loss, Y, payoff = fbsde.bsdeint(ts=ts,x0=x0,option=lookback,lag=lag)
-                payoff = payoff.mean()
+                payoff = torch.exp(-mu*ts[-1])*payoff.mean()
             
             pbar.update(10)
             write("loss={:.4f}, Monte Carlo price={:.4f}, predicted={:.4f}".format(loss.item(),payoff.item(), Y[0,0,0].item()),logfile,pbar)
@@ -115,7 +115,7 @@ if __name__ == "__main__":
     else:
         device="cpu"
     
-    results_path = os.path.exists(os.path.join(args.base_dir, "Heston", args.method)
+    results_path = os.path.join(args.base_dir, "Heston", args.method)
     if not os.path.exists(results_path):
         os.makedirs(results_path)
 
