@@ -1,4 +1,15 @@
 # On solving path dependent PDEs (PPDE) / Pricing path-dependent derivatives
+Code to solve PPDEs. For more details, go [here](https://arxiv.org/abs/2011.10630)
+    
+    @misc{sabatevidales2020solving,
+          title={Solving path dependent PDEs with LSTM networks and path signatures}, 
+          author={Marc Sabate-Vidales and David Šiška and Lukasz Szpruch},
+          year={2020},
+          eprint={2011.10630},
+          archivePrefix={arXiv},
+          primaryClass={q-fin.CP}
+    }
+
 
 We use LSTM networks as non-anticipative functionals, and path signatures to price path dependent derivatives at any time t, given the asset price history. 
 We use two different learning algorithms:
