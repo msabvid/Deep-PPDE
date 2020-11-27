@@ -11,7 +11,10 @@ Code to solve PPDEs. For more details, go [here](https://arxiv.org/abs/2011.1063
     }
 
 
-We use LSTM networks as non-anticipative functionals, and path signatures to price path dependent derivatives at any time t, given the asset price history. 
+We use LSTM networks as non-anticipative functionals, and path signatures to price path dependent derivatives at any time t, given the asset price history.
+This is equivalent to solving
+![](/images_readme/ppde.png)
+
 We use two different learning algorithms:
 - The BSDE method --> we also learn the hedging strategy.
 - Learning the conditional expectation E[X|F] as the orthogonal projection of X onto the sigma-algebra F. 
