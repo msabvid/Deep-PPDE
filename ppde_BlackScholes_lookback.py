@@ -66,7 +66,7 @@ def train(T,
             with torch.no_grad():
                 x0 = torch.ones(5000,d,device=device) # we do monte carlo
                 loss, Y, payoff = fbsde.bsdeint(ts=ts,x0=x0,option=lookback,lag=lag)
-                payoff = payoff.mean()
+                payoff = torch.exp(-mu*ts[-1])*payoff.mean()
             
             pbar.update(10)
             write("loss={:.4f}, Monte Carlo price={:.4f}, predicted={:.4f}".format(loss.item(),payoff.item(), Y[0,0,0].item()),logfile,pbar)
