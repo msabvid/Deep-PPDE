@@ -110,6 +110,8 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     
+    assert args.d==2, "Heston implementation is for d=2" 
+    
     if torch.cuda.is_available() and args.use_cuda:
         device = "cuda:{}".format(args.device)
     else:
