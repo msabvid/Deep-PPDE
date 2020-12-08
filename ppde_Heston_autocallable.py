@@ -62,7 +62,7 @@ def train(T,
         if method=="bsde":
             loss, _, _ = fbsde.bsdeint(ts=ts, x0=x0, option=option, lag=lag)
         else:
-            loss, _, _ = fbsde.conditional_expectation(ts=ts, x0=x0, option=lookback, lag=lag)
+            loss, _, _ = fbsde.conditional_expectation(ts=ts, x0=x0, option=option, lag=lag)
         loss.backward()
         optimizer.step()
         losses.append(loss.cpu().item())
