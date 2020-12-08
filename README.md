@@ -51,3 +51,6 @@ For example, training the network using the BSDE method:
 ```
 python ppde_BlackScholes_lookback.py --use_cuda --device 0 --batch_size 2000 --max_updates 20000 --T 0.5 --method bsde
 ```
+
+## Acknowledgements
+Path augmentations code taken from https://github.com/SigCGANs/Conditional-Sig-Wasserstein-GANs
