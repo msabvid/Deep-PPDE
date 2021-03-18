@@ -62,7 +62,7 @@ def train(T,
         if method=="bsde":
             loss, _, _ = fbsde.fbsdeint(ts=ts, x0=x0, option=option, lag=lag)
         else:
-            loss, _, _ = fbsde.conditional_expectation(ts=ts, x0=x0, option=lookback, lag=lag)
+            loss, _, _ = fbsde.conditional_expectation(ts=ts, x0=x0, option=option, lag=lag)
         loss.backward()
         optimizer.step()
         losses.append(loss.cpu().item())
@@ -109,6 +109,8 @@ if __name__ == "__main__":
     
 
     args = parser.parse_args()
+    
+    assert args.d==2, "Heston implementation is for d=2"   
     
     if torch.cuda.is_available() and args.use_cuda:
         device = "cuda:{}".format(args.device)
