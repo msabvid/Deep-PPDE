@@ -69,7 +69,7 @@ class RNN(nn.Module):
         for p in self.parameters():
             p.requires_grad=True
             
-    def forward(self, x):
+    def forward(self, *args):
         """Forward method 
         
         Parameters
@@ -81,6 +81,7 @@ class RNN(nn.Module):
         output : torch.Tensor
             Sequential output. Tensor of size (N, L, d_out) containing the output from the last layer of the RNN for each timestep
         """
+        x = torch.cat(args, -1)
         output_RNN, _ = self.rnn(x)
         output = self.ffn(output_RNN)
         return output

@@ -6,7 +6,7 @@ import tqdm
 import os
 import math
 
-from lib.bsde import FBSDE_Heston as FBSDE
+from lib.bsde import PPDE_Heston as FBSDE
 from lib.options import Lookback
 
 
@@ -60,7 +60,7 @@ def train(T,
         optimizer.zero_grad()
         x0 = sample_x0(batch_size, device)
         if method=="bsde":
-            loss, _, _ = fbsde.bsdeint(ts=ts, x0=x0, option=lookback, lag=lag)
+            loss, _, _ = fbsde.fbsdeint(ts=ts, x0=x0, option=lookback, lag=lag)
         else:
             loss, _, _ = fbsde.conditional_expectation(ts=ts, x0=x0, option=lookback, lag=lag)
         loss.backward()
@@ -71,7 +71,7 @@ def train(T,
             with torch.no_grad():
                 x0 = torch.ones(5000,d,device=device) # we do monte carlo
                 x0[:,1] = x0[:,1]*0.04
-                loss, Y, payoff = fbsde.bsdeint(ts=ts,x0=x0,option=lookback,lag=lag)
+                loss, Y, payoff = fbsde.fbsdeint(ts=ts,x0=x0,option=lookback,lag=lag)
                 payoff = torch.exp(-mu*ts[-1])*payoff.mean()
             
             pbar.update(10)

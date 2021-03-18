@@ -5,13 +5,13 @@ from typing import Tuple, Optional, List
 from abc import abstractmethod
 
 from lib.networks import RNN
-from lib.options import Lookback
+from lib.options import Lookback, BaseOption
 from lib.augmentations import *
 from lib.augmentations import apply_augmentations
 
 
 
-class FBSDE(nn.Module):
+class PPDE(nn.Module):
 
     def __init__(self, d: int, mu: float, depth: int, rnn_hidden: int, ffn_hidden: List[int]):
         super().__init__()
@@ -31,7 +31,6 @@ class FBSDE(nn.Module):
         """
         ...
 
-    
     def prepare_data(self, ts: torch.Tensor, x0: torch.Tensor, lag: int):
         """
         Prepare the data:
@@ -76,9 +75,58 @@ class FBSDE(nn.Module):
             except:
                 pass # it is the last point and we don't have anymore increments, but that's okay, because at the last step of the bsde, we compare thes olution of the bsde against the payoff of the option
         return x, path_signature, sum_increments 
+    
+    def get_stream_signatures(self, ts: torch.Tensor, x: torch.Tensor, lag: int):
+        """
+        Given a path, get the stream of signatures
+        
+        Parameters
+        ----------
+        ts: torch.Tensor
+            Time discretisation.
+        x: torch.Tensor
+            Tensor of size (batch_size, n_steps, d)
+        """
+        device = x.device
+        batch_size = x.shape[0]
+        path_signature = torch.zeros(batch_size, len(range(0, len(ts), lag)), self.sig_channels, device=device)
+        basepoint = torch.zeros(batch_size, 1, self.d, device=device)
+
+        for idx, id_t in enumerate(range(0, len(ts), lag)):
+            if idx == 0:
+                portion_path = torch.cat([basepoint, x[:,0,:].unsqueeze(1)],1)
+            else:
+                portion_path = x[:,id_t-lag:id_t+1,:]
+            augmented_path = apply_augmentations(portion_path, self.augmentations)
+            path_signature[:,idx,:] = signatory.signature(augmented_path, self.depth)
+        return path_signature
+    
+    def eval(self, ts: torch.Tensor, x: torch.Tensor, lag: int):
+
+        x = x.unsqueeze(0) if x.dim()==2 else x
+        device = x.device
+        batch_size, id_t = x.shape[0], x.shape[1]
+        path_signature = self.get_stream_signatures(ts=ts[:id_t], x=x, lag=lag)
+
+        t = ts[:id_t:lag].reshape(1,-1,1).repeat(batch_size,1,1)
+        tx = torch.cat([t,path_signature],2)
+        Y = self.f(tx) # (batch_size, L, 1)
+        return Y[:,-1,:] # (batch_size, 1)
+    
+    def eval_mc(self, ts: torch.Tensor, x: torch.Tensor, lag: int, option: BaseOption, mc_samples: int):
+
+        x = x.unsqueeze(0) if x.dim()==2 else x
+        batch_size, id_t = x.shape[0], x.shape[1]
+        x = torch.repeat_interleave(x, mc_samples, dim=0)
+        device = x.device
+        mc_paths, _ = self.sdeint(ts = ts[id_t-1:], x0 = x[:,-1,:]) 
+        x = torch.cat([x, mc_paths[:,1:,:]],1)
+        payoff = torch.exp(-self.mu * (ts[-1]-ts[id_t-1])) * option.payoff(x)
+        payoff = payoff.reshape(batch_size, mc_samples, 1).mean(1)
+        return payoff
 
     
-    def bsdeint(self, ts: torch.Tensor, x0: torch.Tensor, option: Lookback, lag: int): 
+    def fbsdeint(self, ts: torch.Tensor, x0: torch.Tensor, option: Lookback, lag: int): 
         """
         Parameters
         ----------
@@ -104,22 +152,15 @@ class FBSDE(nn.Module):
 
         loss_fn = nn.MSELoss()
         loss = 0
-        #for idx,t in enumerate(ts[::lag]):
-        #    if t==ts[-1]:
-        #        target = payoff
-        #    else:
-        #        discount_factor = torch.exp(-self.mu*(ts[idx*lag+lag]-t))
-        #        target = discount_factor*Y[:,idx+1,:].detach()
-        #    stoch_int = torch.sum(Z[:,idx,:]*brownian_increments[:,idx,:], 1, keepdim=True)
-        #    pred = Y[:,idx,:] + stoch_int # if t==ts[-1], then it is already taken into account that stoch_int=0, because the increment of Brownian motion is 0, therefore we are indeed comparing against the payoff
-        #    loss += loss_fn(pred, target)
         h = t[:,1:,:] - t[:,:-1,:] 
         discount_factor = torch.exp(-self.mu*h) # 
         target = discount_factor*Y[:,1:,:].detach()
         stoch_int = torch.sum(Z*brownian_increments,2,keepdim=True) # (batch_size, L, 1)
         pred = Y[:,:-1,:] + stoch_int[:,:-1,:] # (batch_size, L-1, 1)
+        
         loss = torch.mean((pred-target)**2,0).sum()
         loss += loss_fn(Y[:,-1,:], payoff)
+        
         return loss, Y, payoff
             
             
@@ -191,10 +232,10 @@ class FBSDE(nn.Module):
 
 
 
-class FBSDE_BlackScholes(FBSDE):
+class PPDE_BlackScholes(PPDE):
 
     def __init__(self, d: int, mu: float, sigma: float, depth: int, rnn_hidden: int, ffn_hidden: List[int]):
-        super(FBSDE_BlackScholes, self).__init__(d=d, mu=mu, depth=depth, rnn_hidden=rnn_hidden, ffn_hidden=ffn_hidden)
+        super(PPDE_BlackScholes, self).__init__(d=d, mu=mu, depth=depth, rnn_hidden=rnn_hidden, ffn_hidden=ffn_hidden)
         self.sigma = sigma # change it to a torch.parameter to solve a parametric family of PPDEs
     
     
@@ -226,12 +267,12 @@ class FBSDE_BlackScholes(FBSDE):
 
     
 
-class FBSDE_Heston(FBSDE):
+class PPDE_Heston(PPDE):
 
     def __init__(self, d: int, mu: float, vol_of_vol: float, kappa: float, theta: float,  depth: int, rnn_hidden: int, ffn_hidden: List[int]):
         assert d==2, "we need d=2"
         assert 2*kappa*theta > vol_of_vol , "Feller condition is not satisfied"
-        super(FBSDE_Heston, self).__init__(d=d, mu=mu, depth=depth, rnn_hidden=rnn_hidden, ffn_hidden=ffn_hidden)
+        super(PPDE_Heston, self).__init__(d=d, mu=mu, depth=depth, rnn_hidden=rnn_hidden, ffn_hidden=ffn_hidden)
         self.vol_of_vol = vol_of_vol
         self.kappa = kappa
         self.theta = theta

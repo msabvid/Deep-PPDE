@@ -6,7 +6,7 @@ import tqdm
 import os
 import math
 
-from lib.bsde import FBSDE_Heston as FBSDE
+from lib.bsde import PPDE_Heston as PPDE
 from lib.options import Autocallable
 
 
@@ -49,7 +49,7 @@ def train(T,
     logfile = os.path.join(base_dir, "log.txt")
     ts = torch.linspace(0,T,n_steps+1, device=device)
     option = Autocallable(idx_traded = 0,B=1.02,Q1=1.1,Q2=1.2,q=0.9,r=mu,ts=ts)
-    fbsde = FBSDE(d=d, mu=mu, vol_of_vol=vol_of_vol, kappa=kappa, theta=theta,
+    fbsde = PPDE(d=d, mu=mu, vol_of_vol=vol_of_vol, kappa=kappa, theta=theta,
             depth=depth, rnn_hidden=rnn_hidden, ffn_hidden=ffn_hidden)
     fbsde.to(device)
     optimizer = torch.optim.RMSprop(fbsde.parameters(), lr=0.001)
@@ -60,7 +60,7 @@ def train(T,
         optimizer.zero_grad()
         x0 = sample_x0(batch_size, device)
         if method=="bsde":
-            loss, _, _ = fbsde.bsdeint(ts=ts, x0=x0, option=option, lag=lag)
+            loss, _, _ = fbsde.fbsdeint(ts=ts, x0=x0, option=option, lag=lag)
         else:
             loss, _, _ = fbsde.conditional_expectation(ts=ts, x0=x0, option=lookback, lag=lag)
         loss.backward()
@@ -71,7 +71,7 @@ def train(T,
             with torch.no_grad():
                 x0 = torch.ones(5000,d,device=device) # we do monte carlo
                 x0[:,1] = x0[:,1]*0.04
-                loss, Y, payoff = fbsde.bsdeint(ts=ts,x0=x0,option=option,lag=lag)
+                loss, Y, payoff = fbsde.fbsdeint(ts=ts,x0=x0,option=option,lag=lag)
                 payoff = torch.exp(-mu*ts[-1])*payoff.mean()
             
             pbar.update(10)
