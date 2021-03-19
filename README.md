@@ -54,6 +54,7 @@ mu = 0.05 # risk-free rate
 sigma = 0.3 # volatility 
 depth = 3 # depth of signature
 rnn_hidden = 20 # dimension of hidden layer of LSTM network
+ffn_hidden = [20,20]
 max_updates = 1000 # number of SGD steps
 batch_size = 500
 lag = 20 # we calculate the soluton of the PPDE every lag steps of the time discretisation
@@ -70,7 +71,7 @@ else:
 
 results_path = os.path.join(base_dir, "BS", method)
 if not os.path.exists(results_path):
-os.makedirs(results_path)
+    os.makedirs(results_path)
 ```
 We set the time discretisation
 ```
