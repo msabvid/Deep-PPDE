@@ -49,7 +49,7 @@ def train(T,
     ppde = PPDE(d, mu, sigma, depth, rnn_hidden, ffn_hidden)
     ppde.to(device)
     optimizer = torch.optim.RMSprop(ppde.parameters(), lr=0.0005)
-    
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5000, gamma=0.2)
     pbar = tqdm.tqdm(total=max_updates)
     losses = []
     for idx in range(max_updates):
@@ -61,6 +61,7 @@ def train(T,
             loss, _, _ = ppde.conditional_expectation(ts=ts, x0=x0, option=lookback, lag=lag)
         loss.backward()
         optimizer.step()
+        scheduler.step()
         losses.append(loss.detach().cpu().item())
         # testing
         if (idx+1) % 10 == 0:
@@ -82,12 +83,21 @@ def train(T,
     with torch.no_grad():
         x, _ = ppde.sdeint(ts=ts, x0=x0)
     fig, ax = plt.subplots()
-    ax.plot(x[0,:,0].cpu().numpy())
+    ax.plot(ts.cpu().numpy(), x[0,:,0].cpu().numpy())
+    ax.set_ylabel(r"$X(t)$")
     fig.savefig(os.path.join(base_dir, "path_eval.pdf"))
     pred, mc_pred = [], []
     for idx, t in enumerate(ts[::lag]):
         pred.append(ppde.eval(ts=ts, x=x[:,:(idx*lag)+1,:], lag=lag).detach())
         mc_pred.append(ppde.eval_mc(ts=ts, x=x[:,:(idx*lag)+1,:], lag=lag, option=lookback, mc_samples=10000))
+    pred = torch.cat(pred, 0).view(-1).cpu().numpy()
+    mc_pred = torch.cat(mc_pred, 0).view(-1).cpu().numpy()
+    fig, ax = plt.subplots()
+    ax.plot(ts[::lag].cpu().numpy(), pred, '--', label="LSTM + BSDE + sign")
+    ax.plot(ts[::lag].cpu().numpy(), mc_pred, '-', label="MC")
+    ax.set_ylabel(r"$v(t,X_t)$")
+    ax.legend()
+    fig.savefig(os.path.join(base_dir, "BS_lookback_LSTM_sol.pdf"))
     print("THE END")
 
 

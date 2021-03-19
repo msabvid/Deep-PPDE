@@ -5,6 +5,7 @@ import argparse
 import tqdm
 import os
 import math
+import matplotlib.pyplot as plt
 
 from lib.bsde import PPDE_Heston as PPDE
 from lib.options import Autocallable
@@ -81,6 +82,28 @@ def train(T,
             "loss":losses}
     torch.save(result, os.path.join(base_dir, "result.pth.tar"))
 
+    # evaluation
+    x0 = torch.ones(1,d,device=device)#sample_x0(1, d, device)
+    x0[:,1]=x0[:,1]*0.04
+    with torch.no_grad():
+        x, _ = fbsde.sdeint(ts=ts, x0=x0)
+    fig, ax = plt.subplots()
+    ax.plot(ts.cpu().numpy(), x[0,:,0].cpu().numpy())
+    ax.set_ylabel(r"$X(t)$")
+    fig.savefig(os.path.join(base_dir, "heston_path_eval.pdf"))
+    pred, mc_pred = [], []
+    for idx, t in enumerate(ts[::lag]):
+        pred.append(fbsde.eval(ts=ts, x=x[:,:(idx*lag)+1,:], lag=lag).detach())
+        mc_pred.append(fbsde.eval_mc(ts=ts, x=x[:,:(idx*lag)+1,:], lag=lag, option=option, mc_samples=10000))
+    pred = torch.cat(pred, 0).view(-1).cpu().numpy()
+    mc_pred = torch.cat(mc_pred, 0).view(-1).cpu().numpy()
+    fig, ax = plt.subplots()
+    ax.plot(ts[::lag].cpu().numpy(), pred, '--', label="LSTM + BSDE + sign")
+    ax.plot(ts[::lag].cpu().numpy(), mc_pred, '-', label="MC")
+    ax.set_ylabel(r"$v(t,X_t)$")
+    ax.legend()
+    fig.savefig(os.path.join(base_dir, "Heston_autocallable_LSTM_sol.pdf"))
+    print("THE END")
 
 
 if __name__ == "__main__":
