@@ -100,7 +100,6 @@ for idx in range(max_updates):
     pbar.update(1)
 ```
 We plot the result. For this we generate one random path of the price of the underlying asset, and we evaluate the learned solution of the PPDE on this path, in each timestep of the time discretisation. We compare against the solution estimated using Monte Carlo. 
-We generate the path and we plot it:
 ```
 x0 = torch.ones(1,d,device=device)#sample_x0(1, d, device)
 with torch.no_grad():
@@ -113,8 +112,8 @@ pred, mc_pred = [], []
 for idx, t in enumerate(ts[::lag]):
     pred.append(ppde.eval(ts=ts, x=x[:,:(idx*lag)+1,:], lag=lag).detach())
     mc_pred.append(ppde.eval_mc(ts=ts, x=x[:,:(idx*lag)+1,:], lag=lag, option=lookback, mc_samples=10000))
-    pred = torch.cat(pred, 0).view(-1).cpu().numpy()
-    mc_pred = torch.cat(mc_pred, 0).view(-1).cpu().numpy()
+pred = torch.cat(pred, 0).view(-1).cpu().numpy()
+mc_pred = torch.cat(mc_pred, 0).view(-1).cpu().numpy()
 fig, ax = plt.subplots()
 ax.plot(ts[::lag].cpu().numpy(), pred, '--', label="LSTM + BSDE + sign")
 ax.plot(ts[::lag].cpu().numpy(), mc_pred, '-', label="MC")
