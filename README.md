@@ -123,6 +123,8 @@ fig.savefig(os.path.join(base_dir, "BS_lookback_LSTM_sol.pdf"))
 print("THE END")
 
 ```
+
+In the plots labels, `X_t` denotes the stopped path at `t`, i.e. `X_t (u) = X(min(t,u))`. 
 ![](/images_readme/path_eval.png)
 
 ![](/images_readme/BS_lookback_LSTM_sol.png)
