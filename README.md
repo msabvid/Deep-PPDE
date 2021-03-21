@@ -87,7 +87,7 @@ ppde = PPDE(d, mu, sigma, depth, rnn_hidden, ffn_hidden).to(device)
 optimizer = torch.optim.RMSprop(ppde.parameters(), lr=0.0005)
 scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5000, gamma=0.2)
 ```
-We train
+We train using the BSDE method. The method ppde.fbsdeint(...) solves the forward SDE associated to the PPDE, and the BSDE that arises from the Martingale representation of g(X_T), returning the loss to be optimised. More details can be found in the paper.  
 ```
 pbar = tqdm.tqdm(max_updates)
 for idx in range(max_updates):
