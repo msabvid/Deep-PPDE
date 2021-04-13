@@ -22,7 +22,7 @@ We use two different learning algorithms:
 
 ## Example
 Solving the Black-Scholes PPDE to price the Lookback option.
-```
+```python
 import torch
 import torch.nn as nn
 import numpy as np
@@ -36,7 +36,7 @@ from lib.bsde import PPDE_BlackScholes as PPDE # PPDE solver
 from lib.options import Lookback
 ```
 We generate paths to train using the associated SDE. The initial point of the paths is sampled from a lognormal distribution
-```
+```python
 def sample_x0(batch_size, dim, device):
     sigma = 0.3
     mu = 0.08
@@ -46,7 +46,7 @@ def sample_x0(batch_size, dim, device):
     return x0
 ```
 We initialise the problem
-```
+```python
 T = 1. # terminal time
 n_steps = 500 # number of steps in time discretisation where we solve the SDE
 d = 1 # dimension of X
@@ -63,7 +63,7 @@ device=0
 method='bsde' # we us the bsde method to learn the solution of the PPDE
 ```
 We set the cuda device, and the path where we save the results
-```
+```python
 if torch.cuda.is_available():
     device = "cuda:{}".format(args.device)
 else:
@@ -74,21 +74,21 @@ if not os.path.exists(results_path):
     os.makedirs(results_path)
 ```
 We set the time discretisation
-```
+```python
 ts = torch.linspace(0,T,n_steps+1, device=device)  
 ```
 We set the terminal condition
-```
+```python
 lookback = Lookback() # in order to calculate the payoff of a path x where x has shape (batch_size, L, d), do lookback.payoff(x)
 ```
 We initialise the PPDE solver, and the optimizer
-```
+```python
 ppde = PPDE(d, mu, sigma, depth, rnn_hidden, ffn_hidden).to(device)
 optimizer = torch.optim.RMSprop(ppde.parameters(), lr=0.0005)
 scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5000, gamma=0.2)
 ```
 We train using the BSDE method. The method ppde.fbsdeint(...) solves the forward SDE associated to the PPDE, and the BSDE that arises from the Martingale representation of g(X_T), returning the loss to be optimised. More details can be found in the paper.  
-```
+```python
 pbar = tqdm.tqdm(max_updates)
 for idx in range(max_updates):
     optimizer.zero_grad()
@@ -100,7 +100,7 @@ for idx in range(max_updates):
     pbar.update(1)
 ```
 We plot the result. For this we generate one random path of the price of the underlying asset, and we evaluate the learned solution of the PPDE on this path, in each timestep of the time discretisation. We compare against the solution estimated using Monte Carlo. 
-```
+```python
 x0 = torch.ones(1,d,device=device)#sample_x0(1, d, device)
 with torch.no_grad():
         x, _ = ppde.sdeint(ts=ts, x0=x0)
