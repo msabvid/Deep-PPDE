@@ -39,7 +39,8 @@ class FFN(nn.Module):
         for target_param, source_param in zip(self.parameters(), source_net.parameters()):
             target_param.data.copy_((1-tau)*target_param.data + tau*source_param.data)
     
-    def forward(self, x):
+    def forward(self, *args):
+        x = torch.cat(args,-1)
         return self.net(x)
 
 
