@@ -3,6 +3,7 @@ import torch.nn as nn
 import signatory
 from typing import Tuple, Optional, List
 from abc import abstractmethod
+import math
 
 from lib.networks import RNN
 from lib.options import Lookback, BaseOption
@@ -13,16 +14,18 @@ from lib.augmentations import apply_augmentations
 
 class PPDE(nn.Module):
 
-    def __init__(self, d: int, mu: float, depth: int, rnn_hidden: int, ffn_hidden: List[int]):
+    def __init__(self, d: int, mu: float, depth: int, rnn_hidden: int, ffn_hidden: List[int], **kwargs):
         super().__init__()
         self.d = d
+        dim_params_ppde = sum(kwargs.values()) if kwargs else 0
+            
         self.mu = mu # risk free rate
-
+        
         self.depth = depth
         self.augmentations = (LeadLag(with_time=False),)
         self.sig_channels = signatory.signature_channels(channels=2*d, depth=depth) # x2 because we do lead-lag
-        self.f = RNN(rnn_in=self.sig_channels+1, rnn_hidden=rnn_hidden, ffn_sizes=ffn_hidden+[1]) # +1 is for time
-        self.dfdx = RNN(rnn_in=self.sig_channels+1, rnn_hidden=rnn_hidden, ffn_sizes=ffn_hidden+[d]) # +1 is for time
+        self.f = RNN(rnn_in=self.sig_channels + 1 + dim_params_ppde, rnn_hidden=rnn_hidden, ffn_sizes=ffn_hidden+[1]) # +1 is for time
+        self.dfdx = RNN(rnn_in=self.sig_channels + 1 + dim_params_ppde, rnn_hidden=rnn_hidden, ffn_sizes=ffn_hidden+[d]) # +1 is for time
 
     @abstractmethod
     def sdeint(self, ts, x0):
@@ -302,3 +305,119 @@ class PPDE_Heston(PPDE):
             x_new = torch.stack([s_new, v_new], 1) # (batch_size, 2)
             x = torch.cat([x, x_new.unsqueeze(1)],1)
         return x, brownian_increments
+
+class PPDE_RoughVol(PPDE):
+
+    def __init__(self, mu: float, depth: int, rnn_hidden: int, ffn_hidden: List[int], kappa: float, V_infty: float, eta: float, H: float, rho: float, **kwargs):
+        """
+        Parametric PPDE to price options under Rough Volatility model
+
+        Parameters
+        ----------
+        mu: float
+            Risk-free rate
+        depth: int
+            Depth of signature
+        rnn_hidden: int
+            Number of neurons in hidden layer of LSTM
+        ffn_hidden: int
+            Number of neurons in hidden layer of output of LSTM
+        kappa: float
+            coefficient drift of vol process. See https://papers.ssrn.com/sol3/papers.cfm?abstract_id=3400035
+        V_infty: float
+            target vol in the mean reverse process
+        
+        **kwargs
+            additional dims of parameters in the parametric PPDE
+            
+
+            
+
+        """
+
+        super(PPDE_RoughVol, self).__init__(d=2, mu=mu, depth=depth, rnn_hidden=rnn_hidden, ffn_hidden=ffn_hidden, **kwargs)
+
+        self.kappa=kapppa
+        self.V_infty = V_infty
+        self.eta = eta
+        self.H = H
+        self.rho = rho
+
+    def _K(self, t):
+        """
+        Kernel function in vol process
+        """
+        return t**(self.H-0.5) / math.gamma(self.H + 0.5)
+
+    def sdeint(self, ts, x0):
+        """
+        Euler scheme to solve the SDE.
+        Parameters
+        ----------
+        ts: troch.Tensor
+            timegrid. Vector of length N
+        x0: torch.Tensor
+            initial value of SDE. Tensor of shape (batch_size, d)
+        """
+        x = x0.unsqueeze(1)
+        batch_size = x.shape[0]
+        device = x.device
+        brownian_increments = torch.randn(batch_size, len(ts)-1, self.d, device=device)
+        brownian_increments[...,0] = self.rho * brownian_increments[...,0] + (1-self.rho) * brownian_increments[...,-1]
+
+        
+        for idx, t in enumerate(ts[1:]):
+            h = ts[idx+1] - ts[idx]
+            brownian_increments[:,idx,:] *= torch.sqrt(h)
+            s_new = x[:,-1,0] + self.mu*x[:,-1,0]*h + x[:,-1,0]*torch.exp(x[:,-1,1])*brownian_increments[:,idx,0]
+
+            driftV, diffV = 0
+            K = [self._K(ts[idx+1] - r) for r in ts[:idx+1]]
+            for idt in range(idx+1):
+                driftV += K[idt] * self.kappa * (x[:,idt,1] - self.V_infty) * h
+                diffV += K[idt] * self.eta * x[:,idt,1] * brownian_increments[:,idt,1]
+            v_new = x[:,0,1] + driftV + diffV
+
+            x_new = torch.stack([s_new, v_new],1)
+            x = torch.cat([x,x_new.unsqueeze(1)],1)
+        return x, brownian_increments
+
+    def fbsdeint_parametric(self, ts: torch.Tensor, x0: torch.Tensor, lag: int): 
+        """
+        Parameters
+        ----------
+        ts: troch.Tensor
+            timegrid. Vector of length N
+        x0: torch.Tensor
+            initial value of SDE. Tensor of shape (batch_size, d)
+        option: object of class option to calculate payoff
+        lag: int
+            lag in fine time discretisation
+        
+        """
+
+        x, path_signature, brownian_increments = self.prepare_data(ts,x0,lag)
+        device = x.device
+        strikes = 0.9 + 0.2* torch.rand(x.shape[0], device=device)
+        option = EuropeanCall(strikes)
+        payoff = option.payoff(x[:,-1,:]) # (batch_size, 1)
+        batch_size = x.shape[0]
+        t = ts[::lag].reshape(1,-1,1).repeat(batch_size,1,1)
+        L = path_signature.shape[1]
+        strikes = torch.repeat_interleave(strikes.rehape(-1,1,1), L, dim=1)
+        
+        Y = self.f(t, path_signature, strikes) # (batch_size, L, 1)
+        Z = self.dfdx(t, path_signature, strikes) # (batch_size, L, dim)
+
+        loss_fn = nn.MSELoss()
+        loss = 0
+        h = t[:,1:,:] - t[:,:-1,:] 
+        discount_factor = torch.exp(-self.mu*h) # 
+        target = discount_factor*Y[:,1:,:].detach()
+        stoch_int = torch.sum(Z*brownian_increments,2,keepdim=True) # (batch_size, L, 1)
+        pred = Y[:,:-1,:] + stoch_int[:,:-1,:] # (batch_size, L-1, 1)
+        
+        loss = torch.mean((pred-target)**2,0).sum()
+        loss += loss_fn(Y[:,-1,:], payoff)
+        
+        return loss, Y, payoff
