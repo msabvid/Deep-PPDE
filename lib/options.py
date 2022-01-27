@@ -78,3 +78,26 @@ class Autocallable(BaseOption):
         return payoff.unsqueeze(1) # (batch_size, 1)
 
 
+class EuropeanCall(BaseOption):
+    
+    def __init__(self, K):
+        """
+        Parameters
+        ----------
+        K: float or torch.tensor
+            Strike. Id K is a tensor, it needs to have shape (batch_size)
+        """
+        self.K = K
+
+    def payoff(self, x):
+        """
+        Parameters
+        ----------
+        x: torch.Tensor
+            Asset price at terminal time. Tensor of shape (batch_size, d) 
+        Returns
+        -------
+        payoff: torch.Tensor
+            basket option payoff. Tensor of shape (batch_size,1)
+        """
+        return torch.clamp(x[:,0]-self.K, 0).unsqueeze(1) # (batch_size, 1)
