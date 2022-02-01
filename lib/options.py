@@ -100,4 +100,9 @@ class EuropeanCall(BaseOption):
         payoff: torch.Tensor
             basket option payoff. Tensor of shape (batch_size,1)
         """
-        return torch.clamp(x[:,0]-self.K, 0).unsqueeze(1) # (batch_size, 1)
+        if x.dim()==3:
+            return torch.clamp(x[:,-1,0]-self.K, 0).unsqueeze(1) # (batch_size, 1)
+        elif x.dim() == 2:
+            return torch.clamp(x[:,0]-self.K, 0).unsqueeze(1) # (batch_size, 1)
+        else:
+            raise ValueError('x needs to be last spot price, or trajectory of prices')
