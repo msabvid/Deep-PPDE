@@ -6,7 +6,7 @@ from abc import abstractmethod
 import math
 
 from lib.networks import RNN
-from lib.options import Lookback, BaseOption
+from lib.options import Lookback, BaseOption, EuropeanCall
 from lib.augmentations import *
 from lib.augmentations import apply_augmentations
 
@@ -104,7 +104,7 @@ class PPDE(nn.Module):
             path_signature[:,idx,:] = signatory.signature(augmented_path, self.depth)
         return path_signature
     
-    def eval(self, ts: torch.Tensor, x: torch.Tensor, lag: int):
+    def eval(self, ts: torch.Tensor, x: torch.Tensor, lag: int, **kwargs):
 
         x = x.unsqueeze(0) if x.dim()==2 else x
         device = x.device
@@ -113,7 +113,11 @@ class PPDE(nn.Module):
 
         t = ts[:id_t:lag].reshape(1,-1,1).repeat(batch_size,1,1)
         tx = torch.cat([t,path_signature],2)
-        Y = self.f(tx) # (batch_size, L, 1)
+        args = []
+        for key in kwargs.keys():
+            args.append(torch.ones_like(t) * kwargs[key])
+        with torch.no_grad():
+            Y = self.f(tx, *args) # (batch_size, L, 1)
         return Y[:,-1,:] # (batch_size, 1)
     
     def eval_mc(self, ts: torch.Tensor, x: torch.Tensor, lag: int, option: BaseOption, mc_samples: int):
@@ -330,14 +334,11 @@ class PPDE_RoughVol(PPDE):
         **kwargs
             additional dims of parameters in the parametric PPDE
             
-
-            
-
         """
 
-        super(PPDE_RoughVol, self).__init__(d=2, mu=mu, depth=depth, rnn_hidden=rnn_hidden, ffn_hidden=ffn_hidden, **kwargs)
+        super(PPDE_RoughVol, self).__init__(d=2, mu=mu, depth=depth, rnn_hidden=rnn_hidden, ffn_hidden=ffn_hidden, dim_strike=1)
 
-        self.kappa=kapppa
+        self.kappa=kappa
         self.V_infty = V_infty
         self.eta = eta
         self.H = H
@@ -371,7 +372,7 @@ class PPDE_RoughVol(PPDE):
             brownian_increments[:,idx,:] *= torch.sqrt(h)
             s_new = x[:,-1,0] + self.mu*x[:,-1,0]*h + x[:,-1,0]*torch.exp(x[:,-1,1])*brownian_increments[:,idx,0]
 
-            driftV, diffV = 0
+            driftV, diffV = 0, 0
             K = [self._K(ts[idx+1] - r) for r in ts[:idx+1]]
             for idt in range(idx+1):
                 driftV += K[idt] * self.kappa * (x[:,idt,1] - self.V_infty) * h
@@ -382,7 +383,7 @@ class PPDE_RoughVol(PPDE):
             x = torch.cat([x,x_new.unsqueeze(1)],1)
         return x, brownian_increments
 
-    def fbsdeint_parametric(self, ts: torch.Tensor, x0: torch.Tensor, lag: int): 
+    def fbsdeint_parametric(self, ts: torch.Tensor, x0: torch.Tensor, lag: int, **kwargs): 
         """
         Parameters
         ----------
@@ -398,13 +399,16 @@ class PPDE_RoughVol(PPDE):
 
         x, path_signature, brownian_increments = self.prepare_data(ts,x0,lag)
         device = x.device
-        strikes = 0.9 + 0.2* torch.rand(x.shape[0], device=device)
+        if kwargs.get('K') is not None:
+            strikes = torch.ones(x.shape[0], device=device)*kwargs.get('K')
+        else:
+            strikes = 0.9 + 0.2* torch.rand(x.shape[0], device=device)
         option = EuropeanCall(strikes)
         payoff = option.payoff(x[:,-1,:]) # (batch_size, 1)
         batch_size = x.shape[0]
         t = ts[::lag].reshape(1,-1,1).repeat(batch_size,1,1)
         L = path_signature.shape[1]
-        strikes = torch.repeat_interleave(strikes.rehape(-1,1,1), L, dim=1)
+        strikes = torch.repeat_interleave(strikes.reshape(-1,1,1), L, dim=1)
         
         Y = self.f(t, path_signature, strikes) # (batch_size, L, 1)
         Z = self.dfdx(t, path_signature, strikes) # (batch_size, L, dim)
