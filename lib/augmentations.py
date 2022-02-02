@@ -4,7 +4,7 @@ from typing import List, Tuple
 import signatory
 import torch
 
-__all__ = ['AddLags', 'Concat', 'Cumsum', 'LeadLag', 'Scale']
+__all__ = ['AddLags', 'Concat', 'Cumsum', 'LeadLag', 'Scale', 'AddTime']
 
 
 def get_time_vector(size: int, length: int) -> torch.Tensor:
@@ -51,6 +51,14 @@ class BaseAugmentation:
     def apply(self, *args: List[torch.Tensor]) -> torch.Tensor:
         raise NotImplementedError('Needs to be implemented by child.')
 
+@dataclass
+class AddTime(BaseAugmentation):
+    
+    def apply(self, x: torch.Tensor, ts: torch.Tensor) -> torch.Tensor:
+        assert x.shape[1] == len(ts), 'lenght of trajectory and time discretisation need to be the same'
+        batch_size = x.shape[0]
+        t = ts.reshape(1,-1,1).repeat(batch_size,1,1)
+        return torch.cat([t,x], -1)
 
 @dataclass
 class Scale(BaseAugmentation):
@@ -95,18 +103,22 @@ class LeadLag(BaseAugmentation):
             return lead_lag_transform(x)
 
 
-def _apply_augmentation(x: torch.Tensor, y: torch.Tensor, augmentation) \
+def _apply_augmentation(x: torch.Tensor, y: torch.Tensor, augmentation, **kwargs) \
         -> Tuple[torch.Tensor, torch.Tensor]:
     if type(augmentation).__name__ == 'Concat':  # todo
         return y, augmentation.apply(x, y)
     else:
-        return y, augmentation.apply(y)
+        args = kwargs.get(type(augmentation).__name__)
+        if args is not None:
+            return y, augmentation.apply(y, *[args])
+        else:
+            return y, augmentation.apply(y)
 
 
-def apply_augmentations(x: torch.Tensor, augmentations: Tuple) -> torch.Tensor:
+def apply_augmentations(x: torch.Tensor, augmentations: Tuple, **kwargs) -> torch.Tensor:
     y = x
     for augmentation in augmentations:
-        x, y = _apply_augmentation(x, y, augmentation)
+        x, y = _apply_augmentation(x, y, augmentation, **kwargs)
     return y
 
 
