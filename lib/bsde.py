@@ -14,27 +14,126 @@ from lib.augmentations import apply_augmentations
 
 class PPDE(nn.Module):
 
-    def __init__(self, d: int, mu: float, depth: int, rnn_hidden: int, ffn_hidden: List[int], **kwargs):
+    def __init__(self, d: int, mu: float, depth: int, rnn_hidden: int, ffn_hidden: List[int], continuous_approx: bool = True, **kwargs):
+        """
+        Base class that solves the parametric linear PPDE
+        
+        Parameters
+        ----------
+        d: int
+            dimension of the PPDE
+        mu: float
+            risk-free rate
+        depth: int
+            depth of the signature
+        rnn_hidden: int
+            number of neurons in hidden layer of LSTM
+        ffn_hidden: List[int]
+            list with number of neurons per hidden layer in ffn after LSTM
+        kwargs: dict()
+            Additional keywords giving the dimensional of the additional parameters of the parametric PPDE. For example, one can have dim_sigma = 1
+
+
+        """
+        
         super().__init__()
+
         self.d = d
         dim_params_ppde = sum(kwargs.values()) if kwargs else 0
             
         self.mu = mu # risk free rate
         
         self.depth = depth
-        self.augmentations = (LeadLag(with_time=False),)
-        self.sig_channels = signatory.signature_channels(channels=2*d, depth=depth) # x2 because we do lead-lag
-        self.f = RNN(rnn_in=self.sig_channels + 1 + dim_params_ppde, rnn_hidden=rnn_hidden, ffn_sizes=ffn_hidden+[1]) # +1 is for time
-        self.dfdx = RNN(rnn_in=self.sig_channels + 1 + dim_params_ppde, rnn_hidden=rnn_hidden, ffn_sizes=ffn_hidden+[d]) # +1 is for time
+        self.augmentations = (AddTime(),)#(LeadLag(with_time=False),)
+        #self.sig_channels = signatory.signature_channels(channels=2*d, depth=depth) # x2 because we do lead-lag
+        self.sig_channels = signatory.signature_channels(channels=d+1, depth=depth) # +1 because we augment the path with time
+        self.continuous_approx = continuous_approx
+        if continuous_approx:
+            self.f = RNN(rnn_in=self.sig_channels + 1 + dim_params_ppde, rnn_hidden=rnn_hidden, ffn_sizes=ffn_hidden+[1]) # +1 is for time
+            self.dfdx = RNN(rnn_in=self.sig_channels + 1 + dim_params_ppde, rnn_hidden=rnn_hidden, ffn_sizes=ffn_hidden+[d]) # +1 is for time
+        else:
+            self.f = RNN(rnn_in=self.d + 1 + dim_params_ppde, rnn_hidden=rnn_hidden, ffn_sizes=ffn_hidden+[1]) # +1 is for time
+            self.dfdx = RNN(rnn_in=self.d + 1 + dim_params_ppde, rnn_hidden=rnn_hidden, ffn_sizes=ffn_hidden+[d]) # +1 is for time
+
 
     @abstractmethod
-    def sdeint(self, ts, x0):
+    def sdeint(self, ts, x0, **kwargs):
         """
         Code here the SDE that the underlying assets follow
         """
         ...
 
-    def prepare_data(self, ts: torch.Tensor, x0: torch.Tensor, lag: int):
+
+    def prepare_data(self, ts: torch.Tensor, x0: torch.Tensor, lag: int, **kwargs):
+        """
+        Prepare the data:
+            1. Solve the sde using some sde solver on a fine time discretisation
+            2. calculate path signature between consecutive timesteps of a coarser time discretisation
+            3. Calculate increments of brownian motion on the coarser time discretisation
+        Parameters
+        ----------
+        ts: torch.Tensor
+            Time discrstisation. Tensor of size (n_steps + 1)
+        x0: torch.Tensor
+            initial value of paths. Tensor of size (batch_size, d)
+        lag: int
+            lag used to create the coarse time discretisation in terms of the fine time discretisation.
+        
+        Returns
+        -------
+        x: torch.Tensor
+            Solution of the SDE on the fine time discretisation. Tensor of shape (batch_size, n_steps+1, d)
+        input_nn: torch.Tensor
+            Discrete path, of path of signatures depending on the input of the NN
+        sum_increments: torch.Tensor
+            Increments of the Brownian motion on the coarse time discretisation. Tensor of shape (batch_size, n_steps/lag+1, d)
+        """
+
+        if self.continuous_approx:
+            x, input_nn, sum_increments = self._prepare_data_with_signature(ts=ts, x0=x0, lag=lag, **kwargs)
+        else:
+            x, input_nn, sum_increments = self._prepare_data_without_signature(ts=ts, x0=x0, lag=lag, **kwargs)
+        
+        return x, input_nn, sum_increments
+
+    def _prepare_data_without_signature(self, ts: torch.Tensor, x0: torch.Tensor, lag: int, **kwargs):
+        """
+        Prepare the data:
+            1. Solve the sde using some sde solver on a fine time discretisation
+            2. calculate path signature between consecutive timesteps of a coarser time discretisation
+            3. Calculate increments of brownian motion on the coarser time discretisation
+        Parameters
+        ----------
+        ts: torch.Tensor
+            Time discrstisation. Tensor of size (n_steps + 1)
+        x0: torch.Tensor
+            initial value of paths. Tensor of size (batch_size, d)
+        lag: int
+            lag used to create the coarse time discretisation in terms of the fine time discretisation.
+        
+        Returns
+        -------
+        x: torch.Tensor
+            Solution of the SDE on the fine time discretisation. Tensor of shape (batch_size, n_steps+1, d)
+        input_nn: torch.Tensor
+            Discrete path
+        sum_increments: torch.Tensor
+            Increments of the Brownian motion on the coarse time discretisation. Tensor of shape (batch_size, n_steps/lag+1, d)
+        """
+        x, brownian_increments = self.sdeint(ts, x0, **kwargs)
+        device = x.device
+        batch_size = x.shape[0]
+        sum_increments = torch.zeros(batch_size, len(range(0, len(ts), lag)), self.d, device=device)
+
+        for idx, id_t in enumerate(range(0, len(ts), lag)):
+            try:
+                sum_increments[:,idx,:] = torch.sum(brownian_increments[:,id_t:id_t+lag], 1)
+            except:
+                pass # it is the last point and we don't have anymore increments, but that's okay, because at the last step of the bsde, we compare thes olution of the bsde against the payoff of the option
+        return x, x[:,::lag,:], sum_increments 
+    
+    
+    def _prepare_data_with_signature(self, ts: torch.Tensor, x0: torch.Tensor, lag: int, **kwargs):
         """
         Prepare the data:
             1. Solve the sde using some sde solver on a fine time discretisation
@@ -58,7 +157,7 @@ class PPDE(nn.Module):
         sum_increments: torch.Tensor
             Increments of the Brownian motion on the coarse time discretisation. Tensor of shape (batch_size, n_steps/lag+1, d)
         """
-        x, brownian_increments = self.sdeint(ts, x0)
+        x, brownian_increments = self.sdeint(ts, x0, **kwargs)
         device = x.device
         batch_size = x.shape[0]
         path_signature = torch.zeros(batch_size, len(range(0, len(ts), lag)), self.sig_channels, device=device)
@@ -67,12 +166,15 @@ class PPDE(nn.Module):
 
         for idx, id_t in enumerate(range(0, len(ts), lag)):
             if idx == 0:
+                t = ts[:1].repeat(2)
                 portion_path = torch.cat([basepoint, x[:,0,:].unsqueeze(1)],1)
             else:
+                t = ts[id_t-lag:id_t+1]
                 portion_path = x[:,id_t-lag:id_t+1,:] 
                 
-            augmented_path = apply_augmentations(portion_path, self.augmentations)
-            path_signature[:,idx,:] = signatory.signature(augmented_path, self.depth)
+            augmented_path = apply_augmentations(portion_path, self.augmentations, AddTime=t)
+            if self.continuous_approx:
+                path_signature[:,idx,:] = signatory.signature(augmented_path, self.depth)
             try:
                 sum_increments[:,idx,:] = torch.sum(brownian_increments[:,id_t:id_t+lag], 1)
             except:
@@ -97,22 +199,29 @@ class PPDE(nn.Module):
 
         for idx, id_t in enumerate(range(0, len(ts), lag)):
             if idx == 0:
+                t = ts[:1].repeat(2)
                 portion_path = torch.cat([basepoint, x[:,0,:].unsqueeze(1)],1)
             else:
-                portion_path = x[:,id_t-lag:id_t+1,:]
-            augmented_path = apply_augmentations(portion_path, self.augmentations)
+                t = ts[id_t-lag:id_t+1]
+                portion_path = x[:,id_t-lag:id_t+1,:] 
+            augmented_path = apply_augmentations(portion_path, self.augmentations, AddTime=t)
             path_signature[:,idx,:] = signatory.signature(augmented_path, self.depth)
         return path_signature
     
     def eval(self, ts: torch.Tensor, x: torch.Tensor, lag: int, **kwargs):
-
+        """
+        Calculate the approximation of the solution of the PPDE at (t,x)
+        """
         x = x.unsqueeze(0) if x.dim()==2 else x
         device = x.device
         batch_size, id_t = x.shape[0], x.shape[1]
-        path_signature = self.get_stream_signatures(ts=ts[:id_t], x=x, lag=lag)
+        if self.continuous_approx:
+            input_nn = self.get_stream_signatures(ts=ts[:id_t], x=x, lag=lag)
+        else:
+            input_nn = x[:,::lag,:]
 
         t = ts[:id_t:lag].reshape(1,-1,1).repeat(batch_size,1,1)
-        tx = torch.cat([t,path_signature],2)
+        tx = torch.cat([t,input_nn],2)
         args = []
         for key in kwargs.keys():
             args.append(torch.ones_like(t) * kwargs[key])
@@ -120,20 +229,22 @@ class PPDE(nn.Module):
             Y = self.f(tx, *args) # (batch_size, L, 1)
         return Y[:,-1,:] # (batch_size, 1)
     
-    def eval_mc(self, ts: torch.Tensor, x: torch.Tensor, lag: int, option: BaseOption, mc_samples: int):
-
+    def eval_mc(self, ts: torch.Tensor, x: torch.Tensor, lag: int, option: BaseOption, mc_samples: int, **kwargs):
+        """
+        Calculate the approximation of the solution of the PPDE using Monte Carlo
+        """
         x = x.unsqueeze(0) if x.dim()==2 else x
         batch_size, id_t = x.shape[0], x.shape[1]
         x = torch.repeat_interleave(x, mc_samples, dim=0)
         device = x.device
-        mc_paths, _ = self.sdeint(ts = ts[id_t-1:], x0 = x[:,-1,:]) 
+        mc_paths, _ = self.sdeint(ts = ts[id_t-1:], x0 = x[:,-1,:], **kwargs) 
         x = torch.cat([x, mc_paths[:,1:,:]],1)
         payoff = torch.exp(-self.mu * (ts[-1]-ts[id_t-1])) * option.payoff(x)
         payoff = payoff.reshape(batch_size, mc_samples, 1).mean(1)
         return payoff
 
     
-    def fbsdeint(self, ts: torch.Tensor, x0: torch.Tensor, option: Lookback, lag: int): 
+    def fbsdeint(self, ts: torch.Tensor, x0: torch.Tensor, option: BaseOption, lag: int, **kwargs): 
         """
         Parameters
         ----------
@@ -147,7 +258,7 @@ class PPDE(nn.Module):
         
         """
 
-        x, path_signature, brownian_increments = self.prepare_data(ts,x0,lag)
+        x, path_signature, brownian_increments = self.prepare_data(ts,x0,lag, **kwargs)
         payoff = option.payoff(x) # (batch_size, 1)
         device = x.device
         batch_size = x.shape[0]
@@ -243,7 +354,7 @@ class PPDE_BlackScholes(PPDE):
 
     def __init__(self, d: int, mu: float, sigma: float, depth: int, rnn_hidden: int, ffn_hidden: List[int]):
         super(PPDE_BlackScholes, self).__init__(d=d, mu=mu, depth=depth, rnn_hidden=rnn_hidden, ffn_hidden=ffn_hidden)
-        self.sigma = sigma # change it to a torch.parameter to solve a parametric family of PPDEs
+        self.sigma = sigma # 
     
     
     def sdeint(self, ts, x0):
@@ -397,7 +508,7 @@ class PPDE_RoughVol(PPDE):
         
         """
 
-        x, path_signature, brownian_increments = self.prepare_data(ts,x0,lag)
+        x, input_nn, brownian_increments = self.prepare_data(ts,x0,lag)
         device = x.device
         if kwargs.get('K') is not None:
             strikes = torch.ones(x.shape[0], device=device)*kwargs.get('K')
@@ -407,11 +518,11 @@ class PPDE_RoughVol(PPDE):
         payoff = option.payoff(x[:,-1,:]) # (batch_size, 1)
         batch_size = x.shape[0]
         t = ts[::lag].reshape(1,-1,1).repeat(batch_size,1,1)
-        L = path_signature.shape[1]
+        L = input_nn.shape[1]
         strikes = torch.repeat_interleave(strikes.reshape(-1,1,1), L, dim=1)
         
-        Y = self.f(t, path_signature, strikes) # (batch_size, L, 1)
-        Z = self.dfdx(t, path_signature, strikes) # (batch_size, L, dim)
+        Y = self.f(t, input_nn, strikes) # (batch_size, L, 1)
+        Z = self.dfdx(t, input_nn, strikes) # (batch_size, L, dim)
 
         loss_fn = nn.MSELoss()
         loss = 0
