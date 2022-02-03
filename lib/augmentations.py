@@ -20,11 +20,12 @@ def lead_lag_transform(x: torch.Tensor) -> torch.Tensor:
     return x_ll
 
 
-def lead_lag_transform_with_time(x: torch.Tensor) -> torch.Tensor:
+def lead_lag_transform_with_time(x: torch.Tensor, ts) -> torch.Tensor:
     """
     Lead-lag transformation for a multivariate paths.
     """
-    t = get_time_vector(x.shape[0], x.shape[1]).to(x.device)
+    batch_size = x.shape[0]
+    t = ts.reshape(1,-1,1).repeat(batch_size,1,1)#get_time_vector(x.shape[0], x.shape[1]).to(x.device)
     t_rep = torch.repeat_interleave(t, repeats=3, dim=1)
     x_rep = torch.repeat_interleave(x, repeats=3, dim=1)
     x_ll = torch.cat([
@@ -96,9 +97,9 @@ class AddLags(BaseAugmentation):
 class LeadLag(BaseAugmentation):
     with_time: bool = False
 
-    def apply(self, x: torch.Tensor):
+    def apply(self, x: torch.Tensor, ts: torch.Tensor = None):
         if self.with_time:
-            return lead_lag_transform_with_time(x)
+            return lead_lag_transform_with_time(x, ts)
         else:
             return lead_lag_transform(x)
 
