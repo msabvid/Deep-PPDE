@@ -86,3 +86,32 @@ class RNN(nn.Module):
         output_RNN, _ = self.rnn(x)
         output = self.ffn(output_RNN)
         return output
+
+
+class RNN_Taylor(nn.Module):
+
+    def __init__(self, ffn_sizes, activation=nn.ReLU, output_activation=nn.Identity):
+        super().__init__()
+        layers = []
+        for j in range(len(ffn_sizes)-1):
+            layers.append(nn.Linear(ffn_sizes[j], ffn_sizes[j+1]))
+            if j<(len(ffn_sizes)-2):
+                layers.append(activation())
+            else:
+                layers.append(output_activation())
+
+        self.ffn = nn.Sequential(*layers)
+        self.ffn_init = nn.Sequential(nn.Linear(ffn_sizes[0], 20), nn.ReLU(), nn.Linear(20, ffn_sizes[-1])) # init vvalue is not necessarily fixed, because it is a parametric PPDE
+
+    def forward(self, *args):
+        x = torch.cat(args, -1)
+        assert x.dim()==3, "x needs to be a trajectory of shape (batch_size, L, dim)"
+        batch_size = x.shape[0]
+        device = x.device
+
+        y = self.ffn(x[:,1:,:])
+        y0 = self.ffn_init(x[:,0,:])
+        y = torch.cat([y0.unsqueeze(1), y], 1)
+        return y.cumsum(1) # Stochastic Taylor expansion assuming the input are the iterated integrals
+
+

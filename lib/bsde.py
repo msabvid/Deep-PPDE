@@ -5,7 +5,7 @@ from typing import Tuple, Optional, List
 from abc import abstractmethod
 import math
 
-from lib.networks import RNN
+from lib.networks import RNN, RNN_Taylor
 from lib.options import Lookback, BaseOption, EuropeanCall
 from lib.augmentations import *
 from lib.augmentations import apply_augmentations
@@ -44,16 +44,20 @@ class PPDE(nn.Module):
         self.mu = mu # risk free rate
         
         self.depth = depth
-        self.augmentations = (AddTime(),)#(LeadLag(with_time=False),)
+        self.augmentations = (LeadLag(with_time=True),)
         #self.sig_channels = signatory.signature_channels(channels=2*d, depth=depth) # x2 because we do lead-lag
-        self.sig_channels = signatory.signature_channels(channels=d+1, depth=depth) # +1 because we augment the path with time
+        self.sig_channels = signatory.logsignature_channels(in_channels=2*d+1, depth=depth) # +1 because we augment the path with time
         self.continuous_approx = continuous_approx
         if continuous_approx:
-            self.f = RNN(rnn_in=self.sig_channels + 1 + dim_params_ppde, rnn_hidden=rnn_hidden, ffn_sizes=ffn_hidden+[1]) # +1 is for time
+            self.f = RNN(rnn_in=self.sig_channels + 1 + dim_params_ppde, rnn_hidden=rnn_hidden, ffn_sizes=ffn_hidden+[1], output_activation=nn.Softplus) # +1 is for time
             self.dfdx = RNN(rnn_in=self.sig_channels + 1 + dim_params_ppde, rnn_hidden=rnn_hidden, ffn_sizes=ffn_hidden+[d]) # +1 is for time
+            #self.f = RNN_Taylor(ffn_sizes=[self.sig_channels+1+dim_params_ppde]+ffn_hidden+[1])
+            #self.dfdx = RNN_Taylor(ffn_sizes=[self.sig_channels+1+dim_params_ppde]+ffn_hidden+[d])
         else:
-            self.f = RNN(rnn_in=self.d + 1 + dim_params_ppde, rnn_hidden=rnn_hidden, ffn_sizes=ffn_hidden+[1]) # +1 is for time
+            self.f = RNN(rnn_in=self.d + 1 + dim_params_ppde, rnn_hidden=rnn_hidden, ffn_sizes=ffn_hidden+[1], output_activation=nn.Softplus) # +1 is for time
             self.dfdx = RNN(rnn_in=self.d + 1 + dim_params_ppde, rnn_hidden=rnn_hidden, ffn_sizes=ffn_hidden+[d]) # +1 is for time
+            #self.f = RNN_Taylor(ffn_sizes=[self.d+1+dim_params_ppde]+ffn_hidden+[1])
+            #self.dfdx = RNN_Taylor(ffn_sizes=[self.d+1+dim_params_ppde]+ffn_hidden+[d])
 
 
     @abstractmethod
@@ -172,9 +176,9 @@ class PPDE(nn.Module):
                 t = ts[id_t-lag:id_t+1]
                 portion_path = x[:,id_t-lag:id_t+1,:] 
                 
-            augmented_path = apply_augmentations(portion_path, self.augmentations, AddTime=t)
+            augmented_path = apply_augmentations(portion_path, self.augmentations, LeadLag=t)
             if self.continuous_approx:
-                path_signature[:,idx,:] = signatory.signature(augmented_path, self.depth)
+                path_signature[:,idx,:] = signatory.logsignature(augmented_path, self.depth)
             try:
                 sum_increments[:,idx,:] = torch.sum(brownian_increments[:,id_t:id_t+lag], 1)
             except:
@@ -204,8 +208,8 @@ class PPDE(nn.Module):
             else:
                 t = ts[id_t-lag:id_t+1]
                 portion_path = x[:,id_t-lag:id_t+1,:] 
-            augmented_path = apply_augmentations(portion_path, self.augmentations, AddTime=t)
-            path_signature[:,idx,:] = signatory.signature(augmented_path, self.depth)
+            augmented_path = apply_augmentations(portion_path, self.augmentations, LeadLag=t)
+            path_signature[:,idx,:] = signatory.logsignature(augmented_path, self.depth)
         return path_signature
     
     def eval(self, ts: torch.Tensor, x: torch.Tensor, lag: int, **kwargs):
@@ -263,7 +267,7 @@ class PPDE(nn.Module):
         device = x.device
         batch_size = x.shape[0]
         t = ts[::lag].reshape(1,-1,1).repeat(batch_size,1,1)
-        tx = torch.cat([t,path_signature],2)
+        tx = torch.cat([t,path_logsignature],2)
         
         Y = self.f(tx) # (batch_size, L, 1)
         Z = self.dfdx(tx) # (batch_size, L, dim)
@@ -423,7 +427,7 @@ class PPDE_Heston(PPDE):
 
 class PPDE_RoughVol(PPDE):
 
-    def __init__(self, mu: float, depth: int, rnn_hidden: int, ffn_hidden: List[int], kappa: float, V_infty: float, eta: float, H: float, rho: float, **kwargs):
+    def __init__(self, mu: float, depth: int, rnn_hidden: int, ffn_hidden: List[int], kappa: float, V_infty: float, eta: float, H: float, rho: float, continuous_approx: bool=True, **kwargs):
         """
         Parametric PPDE to price options under Rough Volatility model
 
@@ -447,7 +451,7 @@ class PPDE_RoughVol(PPDE):
             
         """
 
-        super(PPDE_RoughVol, self).__init__(d=2, mu=mu, depth=depth, rnn_hidden=rnn_hidden, ffn_hidden=ffn_hidden, dim_strike=1)
+        super(PPDE_RoughVol, self).__init__(d=2, mu=mu, depth=depth, rnn_hidden=rnn_hidden, ffn_hidden=ffn_hidden, dim_strike=1, continuous_approx=continuous_approx)
 
         self.kappa=kappa
         self.V_infty = V_infty
@@ -513,7 +517,8 @@ class PPDE_RoughVol(PPDE):
         if kwargs.get('K') is not None:
             strikes = torch.ones(x.shape[0], device=device)*kwargs.get('K')
         else:
-            strikes = 0.9 + 0.2* torch.rand(x.shape[0], device=device)
+            strikes = 0.99 + 0.02* torch.rand(x.shape[0], device=device)
+            #strikes = torch.ones(x.shape[0], device=device) # to be removed!!!!
         option = EuropeanCall(strikes)
         payoff = option.payoff(x[:,-1,:]) # (batch_size, 1)
         batch_size = x.shape[0]

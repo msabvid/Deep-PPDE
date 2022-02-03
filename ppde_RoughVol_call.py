@@ -8,7 +8,7 @@ import math
 import pandas as pd
 import matplotlib.pyplot as plt
 
-from lib.bsde import PPDE_RoughVol as FBSDE
+from lib.bsde import PPDE_RoughVol as PPDE
 from lib.options import EuropeanCall
 
 
@@ -48,16 +48,18 @@ def train(T,
         lag,
         base_dir,
         device,
-        method
+        method,
+        continuous
         ):
     
     logfile = os.path.join(base_dir, "log.txt")
     ts = torch.linspace(0,T,n_steps+1, device=device)
-    fbsde = FBSDE(mu=mu, kappa=kappa, V_infty=V_infty, eta=eta, rho=rho, H=H,
-            depth=depth, rnn_hidden=rnn_hidden, ffn_hidden=ffn_hidden)
-    fbsde.to(device)
-    optimizer = torch.optim.RMSprop(fbsde.parameters(), lr=0.001)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=200, gamma=0.5)
+    ppde = PPDE(mu=mu, kappa=kappa, V_infty=V_infty, eta=eta, rho=rho, H=H,
+            depth=depth, rnn_hidden=rnn_hidden, ffn_hidden=ffn_hidden,
+            continuous_approx=continuous)
+    ppde.to(device)
+    optimizer = torch.optim.RMSprop(ppde.parameters(), lr=0.001)
+    scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[1000,2000], gamma=0.5)
     
     pbar = tqdm.tqdm(total=max_updates)
     losses = []
@@ -65,26 +67,58 @@ def train(T,
         optimizer.zero_grad()
         x0 = sample_x0(batch_size, device)
         if method=="bsde":
-            loss, _, _ = fbsde.fbsdeint_parametric(ts=ts, x0=x0, lag=lag)
+            loss, _, _ = ppde.fbsdeint_parametric(ts=ts, x0=x0, lag=lag)
         #else:
-        #    loss, _, _ = fbsde.conditional_expectation(ts=ts, x0=x0, option=lookback, lag=lag)
+        #    loss, _, _ = ppde.conditional_expectation(ts=ts, x0=x0, option=lookback, lag=lag)
         loss.backward()
         optimizer.step()
         losses.append(loss.cpu().item())
         # testing
-        if idx%10 == 0:
+        if (idx+1)%20 == 0:
             with torch.no_grad():
                 x0 = torch.ones(5000,d,device=device) # we do monte carlo
                 x0[:,1] = x0[:,1]*0.04
-                loss, Y, payoff = fbsde.fbsdeint_parametric(ts=ts,x0=x0,lag=lag, K=1)
+                loss, Y, payoff = ppde.fbsdeint_parametric(ts=ts,x0=x0,lag=lag, K=1)
                 payoff = torch.exp(-mu*ts[-1])*payoff.mean()
-            
-            pbar.update(10)
-            write("loss={:.4f}, Monte Carlo price={:.4f}, predicted={:.4f}".format(loss.item(),payoff.item(), Y[0,0,0].item()),logfile,pbar)
-    
-    result = {"state":fbsde.state_dict(),
-            "loss":losses}
+                write("loss={:.4f}, Monte Carlo price={:.4f}, predicted={:.4f}".format(loss.item(),payoff.item(), Y[0,0,0].item()),logfile,pbar)
+        pbar.update(1)
+    # save results
+    result = {"f":ppde.f.state_dict(),
+              "dfdx":ppde.dfdx.state_dict(),
+              "loss":losses}
     torch.save(result, os.path.join(base_dir, "result.pth.tar"))
+    # make plots
+    evaluate(**locals())
+
+
+def evaluate(T,
+        n_steps,
+        d,
+        mu,
+        kappa,
+        eta,
+        V_infty,
+        rho,
+        H,
+        depth,
+        rnn_hidden,
+        ffn_hidden,
+        lag,
+        base_dir,
+        device,
+        continuous,
+        **kwargs
+        ):
+    
+    logfile = os.path.join(base_dir, "log.txt")
+    ts = torch.linspace(0,T,n_steps+1, device=device)
+    ppde = PPDE(mu=mu, kappa=kappa, V_infty=V_infty, eta=eta, rho=rho, H=H,
+            depth=depth, rnn_hidden=rnn_hidden, ffn_hidden=ffn_hidden,
+            continuous_approx=continuous)
+    ppde.to(device)
+    state = torch.load(os.path.join(base_dir, "result.pth.tar"), map_location=device)
+    ppde.f.load_state_dict(state["f"])
+    ppde.dfdx.load_state_dict(state["dfdx"])
     
     # make plots
     # 1) Option price at t=0
@@ -93,7 +127,7 @@ def train(T,
         with torch.no_grad():
             x0=torch.ones(10000,2,device=device)
             x0[:,1] = x0[:,1]*0.04
-            loss, Y, payoff = fbsde.fbsdeint_parametric(ts=ts,x0=x0,lag=lag,K=K)
+            loss, Y, payoff = ppde.fbsdeint_parametric(ts=ts,x0=x0,lag=lag,K=K)
         payoff = torch.exp(-mu*ts[-1])*payoff.mean()
         price_mc.append(payoff.item())
         price_pred.append(Y[0,0,0].item())
@@ -101,27 +135,50 @@ def train(T,
                        'price_mc':price_mc,
                        'price_pred':price_pred})
     df.to_csv(os.path.join(base_dir, "df.csv"))
+    
+    # 2) approximation of PPDE solution along a path
+    for paths in range(10):
+        print("path {}".format(paths))
+        x0 = torch.ones(1,d,device=device)#sample_x0(1, d, device)
+        x0[:,1] = x0[:,1]*0.04
+        with torch.no_grad():
+            x, _ = ppde.sdeint(ts=ts, x0=x0)
+        
+        fig = plt.figure(figsize=(12,5))
+        spec = fig.add_gridspec(2,2)
+        
+        ax0 = fig.add_subplot(spec[:,0])
+        ax0.plot(ts.cpu().numpy(), x[0,:,0].cpu().numpy())
+        ax0.set_ylabel(r"$S(t)$")
+        
+        for idlag, lag_eval in enumerate([lag//2, lag]):
+            price_pred, price_mc = [], []
+            for idx, t in enumerate(ts[::lag_eval]):
+                price_pred.append(ppde.eval(ts=ts, x=x[:,:(idx*lag_eval)+1,:], lag=lag_eval, K=1).detach())
+                option = EuropeanCall(K=1)
+                price_mc.append(ppde.eval_mc(ts=ts, x=x[:,:(idx*lag_eval)+1,:], lag=lag_eval, option=option, mc_samples=10000))
+            price_pred = torch.cat(price_pred, 0).view(-1).cpu().numpy()
+            price_mc = torch.cat(price_mc, 0).view(-1).cpu().numpy()
+            
+            ax = fig.add_subplot(spec[idlag, 1])
+            ax.plot(ts[::lag_eval].cpu().numpy(), price_pred, '--', label="Deep Learning price")
+            ax.plot(ts[::lag_eval].cpu().numpy(), price_mc, '-', label="Monte Carlo price")
+            ax.set_ylabel(r"$v(t,X_t)$")
+            ax.set_title("Lag {}".format(lag_eval))
+            ax.legend()
+        fig.tight_layout()
+        fig.savefig(os.path.join(base_dir, "RoughVol_path{}.pdf".format(paths)))
 
-    x0 = torch.ones(1,d,device=device)#sample_x0(1, d, device)
-    x0[:,1] = x0[:,1]*0.04
-    with torch.no_grad():
-            x, _ = fbsde.sdeint(ts=ts, x0=x0)
-    fig, ax = plt.subplots(nrows=1,ncols=2,figsize=(12,3))
-    ax[0].plot(ts.cpu().numpy(), x[0,:,0].cpu().numpy())
-    ax[0].set_ylabel(r"$S(t)$")
-    #fig.savefig(os.path.join(base_dir, "path_eval.pdf"))
-    price_pred, price_mc = [], []
-    for idx, t in enumerate(ts[::lag]):
-        price_pred.append(fbsde.eval(ts=ts, x=x[:,:(idx*lag)+1,:], lag=lag, K=1).detach())
-        option = EuropeanCall(K=1)
-        price_mc.append(fbsde.eval_mc(ts=ts, x=x[:,:(idx*lag)+1,:], lag=lag, option=option, mc_samples=10000))
-    price_pred = torch.cat(price_pred, 0).view(-1).cpu().numpy()
-    price_mc = torch.cat(price_mc, 0).view(-1).cpu().numpy()
-    ax[1].plot(ts[::lag].cpu().numpy(), price_pred, '--', label="LSTM + BSDE + sign")
-    ax[1].plot(ts[::lag].cpu().numpy(), price_mc, '-', label="MC")
-    ax[1].set_ylabel(r"$v(t,X_t)$")
-    ax[1].legend()
-    fig.savefig(os.path.join(base_dir, "RoughVol.pdf"))
+
+
+
+
+
+
+
+
+
+
 
 if __name__ == "__main__":
     
@@ -135,7 +192,7 @@ if __name__ == "__main__":
     parser.add_argument('--batch_size', default=500, type=int)
     parser.add_argument('--d', default=2, type=int)
     parser.add_argument('--max_updates', default=5000, type=int)
-    parser.add_argument('--ffn_hidden', default=[20,20], nargs="+", type=int)
+    parser.add_argument('--ffn_hidden', default=[20,10], nargs="+", type=int)
     parser.add_argument('--rnn_hidden', default=20, type=int)
     parser.add_argument('--depth', default=3, type=int)
     parser.add_argument('--T', default=0.5, type=float)
@@ -149,6 +206,9 @@ if __name__ == "__main__":
     parser.add_argument('--rho', default=0., type=float, help="correlation brownian motions")
     parser.add_argument('--method', default="bsde", type=str, help="learning method", choices=["bsde","orthogonal"])
     
+    parser.add_argument('--continuous', default=False, action='store_true')
+    parser.add_argument('--evaluate', default=False, action='store_true')
+    
 
     args = parser.parse_args()
     
@@ -159,26 +219,53 @@ if __name__ == "__main__":
     else:
         device="cpu"
     
-    results_path = os.path.join(args.base_dir, "RoughVol", args.method)
+    if args.continuous:
+        results_path = os.path.join(args.base_dir, "RoughVol", args.method, 'signature')
+    else:
+        results_path = os.path.join(args.base_dir, "RoughVol", args.method, 'discrete')
     if not os.path.exists(results_path):
         os.makedirs(results_path)
 
-    train(T=args.T,
-        n_steps=args.n_steps,
-        d=args.d,
-        mu=args.mu,
-        kappa=args.kappa,
-        V_infty=args.V_infty,
-        eta=args.eta,
-        rho=args.rho,
-        H=args.H,
-        depth=args.depth,
-        rnn_hidden=args.rnn_hidden,
-        ffn_hidden=args.ffn_hidden,
-        max_updates=args.max_updates,
-        batch_size=args.batch_size,
-        lag=args.lag,
-        base_dir=results_path,
-        device=device,
-        method=args.method
-        )
+    
+    if args.evaluate:
+        evaluate(T=args.T,
+            n_steps=args.n_steps,
+            d=args.d,
+            mu=args.mu,
+            kappa=args.kappa,
+            V_infty=args.V_infty,
+            eta=args.eta,
+            rho=args.rho,
+            H=args.H,
+            depth=args.depth,
+            rnn_hidden=args.rnn_hidden,
+            ffn_hidden=args.ffn_hidden,
+            max_updates=args.max_updates,
+            batch_size=args.batch_size,
+            lag=args.lag,
+            base_dir=results_path,
+            device=device,
+            method=args.method,
+            continuous=args.continuous
+            )
+    else:
+        train(T=args.T,
+            n_steps=args.n_steps,
+            d=args.d,
+            mu=args.mu,
+            kappa=args.kappa,
+            V_infty=args.V_infty,
+            eta=args.eta,
+            rho=args.rho,
+            H=args.H,
+            depth=args.depth,
+            rnn_hidden=args.rnn_hidden,
+            ffn_hidden=args.ffn_hidden,
+            max_updates=args.max_updates,
+            batch_size=args.batch_size,
+            lag=args.lag,
+            base_dir=results_path,
+            device=device,
+            method=args.method,
+            continuous=args.continuous
+            )
